@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type WebRtcPlayerProps = {
   className?: string;
+  mediaStyle?: React.CSSProperties;
   camera: string;
   playbackEnabled?: boolean;
   audioEnabled?: boolean;
@@ -19,6 +20,7 @@ type WebRtcPlayerProps = {
 
 export default function WebRtcPlayer({
   className,
+  mediaStyle,
   camera,
   playbackEnabled = true,
   audioEnabled = false,
@@ -322,6 +324,7 @@ export default function WebRtcPlayer({
     <video
       ref={videoRef}
       className={className}
+      style={mediaStyle}
       controls={iOSCompatControls}
       autoPlay
       playsInline

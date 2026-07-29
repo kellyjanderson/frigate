@@ -122,6 +122,14 @@
   "streamingSettings": "Streaming Settings",
   "notifications": "Notifications",
   "audio": "Audio",
+  "levels": {
+    "title": "Levels",
+    "description": "Adjust the displayed tonal range without changing recordings.",
+    "blackPoint": "Black point",
+    "midtones": "Midtones",
+    "whitePoint": "White point",
+    "reset": "Reset levels"
+  },
   "suspend": {
     "forTime": "Suspend for: "
   },

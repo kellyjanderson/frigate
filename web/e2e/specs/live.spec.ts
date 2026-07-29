@@ -136,6 +136,52 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     await frigateApp.page.keyboard.press("Escape");
     await expect(menu).not.toBeVisible({ timeout: 3_000 });
   });
+
+  test("levels control previews and persists a midtone adjustment", async ({
+    frigateApp,
+  }) => {
+    await frigateApp.goto("/#front_door");
+    const live = new LivePage(frigateApp.page, true);
+    await expect(live.backButton).toBeVisible({ timeout: 10_000 });
+
+    const openSettings = async () => {
+      const gearButtons = frigateApp.page.locator("button:has(svg)");
+      await gearButtons.last().click();
+      const menu = frigateApp.page
+        .locator('[role="menu"], [data-radix-menu-content]')
+        .first();
+      await expect(menu).toBeVisible({ timeout: 3_000 });
+      return menu;
+    };
+
+    let menu = await openSettings();
+    const midtones = menu.getByRole("slider", { name: "Midtones" });
+    await expect(midtones).toHaveAttribute("aria-valuenow", "1");
+    await midtones.focus();
+    await midtones.press("ArrowRight");
+    await expect(midtones).toHaveAttribute("aria-valuenow", "1.05");
+
+    await expect
+      .poll(() =>
+        frigateApp.page
+          .locator("#player-container video, #player-container canvas")
+          .evaluateAll((media) =>
+            media.some(
+              (element) => getComputedStyle(element).filter !== "none",
+            ),
+          ),
+      )
+      .toBe(true);
+
+    await frigateApp.page.keyboard.press("Escape");
+    await frigateApp.page.reload();
+    await expect(live.backButton).toBeVisible({ timeout: 10_000 });
+
+    menu = await openSettings();
+    await expect(
+      menu.getByRole("slider", { name: "Midtones" }),
+    ).toHaveAttribute("aria-valuenow", "1.05");
+  });
 });
 
 test.describe("Live Context Menu (desktop) @critical", () => {
@@ -260,6 +306,28 @@ test.describe("Live mobile layout @critical @mobile", () => {
     const live = new LivePage(frigateApp.page, false);
     await live.cameraCard("front_door").first().click({ timeout: 10_000 });
     await expect(frigateApp.page).toHaveURL(/#front_door/);
+  });
+
+  test("mobile camera settings expose the levels control", async ({
+    frigateApp,
+  }) => {
+    test.skip(!frigateApp.isMobile, "Mobile-only");
+    await frigateApp.goto("/#front_door");
+
+    await frigateApp.page
+      .getByRole("button", { name: /settings/i })
+      .first()
+      .click();
+
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "Black point" }),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "Midtones" }),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "White point" }),
+    ).toBeVisible();
   });
 
   test("mobile onvif single-camera view loads without freezing body", async ({

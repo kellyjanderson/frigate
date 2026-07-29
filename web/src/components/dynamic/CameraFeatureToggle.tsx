@@ -47,7 +47,6 @@ export default function CameraFeatureToggle({
 }: CameraFeatureToggleProps) {
   const content = (
     <div
-      onClick={disabled ? undefined : onClick}
       className={cn(
         "flex flex-col items-center justify-center",
         disabled
@@ -76,7 +75,13 @@ export default function CameraFeatureToggle({
   if (isDesktop) {
     return (
       <Tooltip>
-        <TooltipTrigger disabled={disabled}>{content}</TooltipTrigger>
+        <TooltipTrigger
+          aria-label={title}
+          disabled={disabled}
+          onClick={disabled ? undefined : onClick}
+        >
+          {content}
+        </TooltipTrigger>
         <TooltipContent side="bottom">
           <p>{title}</p>
         </TooltipContent>
@@ -84,5 +89,15 @@ export default function CameraFeatureToggle({
     );
   }
 
-  return content;
+  return (
+    <button
+      type="button"
+      aria-label={title}
+      className="rounded-lg"
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {content}
+    </button>
+  );
 }
