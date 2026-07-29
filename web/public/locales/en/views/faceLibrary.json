@@ -12,8 +12,8 @@
   },
   "documentTitle": "Face Library - Frigate",
   "uploadFaceImage": {
-    "title": "Upload Face Image",
-    "desc": "Upload an image to scan for faces and include for {{pageToggle}}"
+    "title": "Upload Face Images",
+    "desc": "Upload one or more images to scan for faces and include for {{pageToggle}}"
   },
   "collections": "Collections",
   "createFaceLibrary": {
@@ -56,7 +56,7 @@
     "addFace": "Add Face",
     "renameFace": "Rename Face",
     "deleteFace": "Delete Face",
-    "uploadImage": "Upload Image",
+    "uploadImage": "Upload Images",
     "reprocessFace": "Reprocess Face"
   },
   "imageEntry": {
@@ -64,8 +64,16 @@
       "selectImage": "Please select an image file."
     },
     "dropActive": "Drop the image here…",
+    "dropActiveMultiple": "Drop the images here…",
     "dropInstructions": "Drag and drop or paste an image here, or click to select",
-    "maxSize": "Max size: {{size}}MB"
+    "dropInstructionsMultiple": "Drag and drop or paste images here, or click to select",
+    "maxSize": "Max size: {{size}}MB",
+    "maxSizeMultiple": "Max size per image: {{size}}MB",
+    "selectedImages_one": "{{count}} image selected",
+    "selectedImages_other": "{{count}} images selected",
+    "previewAlt": "Preview of {{fileName}}",
+    "removeImage": "Remove {{fileName}}",
+    "uploadProgress": "Uploading {{completed}} of {{total}}"
   },
   "nofaces": "No faces available",
   "trainFaceAs": "Train Face as:",
@@ -74,7 +82,8 @@
   "reclassifyFace": "Reclassify Face",
   "toast": {
     "success": {
-      "uploadedImage": "Successfully uploaded image.",
+      "uploadedImages_one": "Successfully uploaded {{count}} image.",
+      "uploadedImages_other": "Successfully uploaded {{count}} images.",
       "addFaceLibrary": "{{name}} has successfully been added to the Face Library!",
       "deletedFace_one": "Successfully deleted {{count}} face.",
       "deletedFace_other": "Successfully deleted {{count}} faces.",
@@ -84,17 +93,22 @@
       "renamedFace": "Successfully renamed face to {{name}}",
       "trainedFace": "Successfully trained face.",
       "reclassifiedFace": "Successfully reclassified face.",
-      "updatedFaceScore": "Successfully updated face score to {{name}} ({{score}})."
+      "updatedFaceScore": "Successfully updated face score to {{name}} ({{score}}).",
+      "uploadedImage": "Successfully uploaded image."
     },
     "error": {
-      "uploadingImageFailed": "Failed to upload image: {{errorMessage}}",
+      "uploadingImagesFailed_zero": "Uploaded {{successful}} of {{total}} images. {{fileName}} failed: {{errorMessage}}.",
+      "uploadingImagesFailed_one": "Uploaded {{successful}} of {{total}} images. {{fileName}} failed: {{errorMessage}}. One additional image failed.",
+      "uploadingImagesFailed_other": "Uploaded {{successful}} of {{total}} images. {{fileName}} failed: {{errorMessage}}. {{count}} additional images failed.",
+      "unknownError": "Unknown error",
       "addFaceLibraryFailed": "Failed to set face name: {{errorMessage}}",
       "deleteFaceFailed": "Failed to delete: {{errorMessage}}",
       "deleteNameFailed": "Failed to delete name: {{errorMessage}}",
       "renameFaceFailed": "Failed to rename face: {{errorMessage}}",
       "trainFailed": "Failed to train: {{errorMessage}}",
       "reclassifyFailed": "Failed to reclassify face: {{errorMessage}}",
-      "updateFaceScoreFailed": "Failed to update face score: {{errorMessage}}"
+      "updateFaceScoreFailed": "Failed to update face score: {{errorMessage}}",
+      "uploadingImageFailed": "Failed to upload image: {{errorMessage}}"
     }
   }
 }

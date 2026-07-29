@@ -15,7 +15,11 @@ type UploadImageDialogProps = {
   title: string;
   description?: string;
   setOpen: (open: boolean) => void;
-  onSave: (file: File) => void;
+  onSave: (files: File[]) => void;
+  progress?: {
+    completed: number;
+    total: number;
+  } | null;
 };
 export default function UploadImageDialog({
   open,
@@ -23,22 +27,49 @@ export default function UploadImageDialog({
   description,
   setOpen,
   onSave,
+  progress,
 }: UploadImageDialogProps) {
-  const { t } = useTranslation("common");
+  const { t } = useTranslation(["common", "views/faceLibrary"]);
+  const isUploading = progress != null;
 
   return (
-    <Dialog open={open} defaultOpen={false} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      defaultOpen={false}
+      onOpenChange={(nextOpen) => {
+        if (!isUploading) {
+          setOpen(nextOpen);
+        }
+      }}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description && <DialogDescription>{description}</DialogDescription>}
         </DialogHeader>
-        <ImageEntry onSave={onSave}>
+        <ImageEntry multiple onSave={onSave}>
+          {progress && (
+            <p
+              className="mr-auto self-center text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              {t("imageEntry.uploadProgress", {
+                ns: "views/faceLibrary",
+                completed: progress.completed,
+                total: progress.total,
+              })}
+            </p>
+          )}
           <DialogFooter className="pt-4">
-            <Button type="button" onClick={() => setOpen(false)}>
+            <Button
+              type="button"
+              disabled={isUploading}
+              onClick={() => setOpen(false)}
+            >
               {t("button.cancel")}
             </Button>
-            <Button variant="select" type="submit">
+            <Button variant="select" type="submit" disabled={isUploading}>
               {t("button.save")}
             </Button>
           </DialogFooter>

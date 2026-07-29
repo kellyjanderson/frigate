@@ -107,6 +107,26 @@ async function openLibraryDropdown(app: FrigateApp): Promise<Locator> {
   return menu;
 }
 
+async function openAliceUploadDialog(app: FrigateApp): Promise<Locator> {
+  const menu = await openLibraryDropdown(app);
+  await menu
+    .locator('[role="menuitem"]')
+    .filter({ hasText: /alice/i })
+    .first()
+    .click();
+
+  const uploadButton = app.page
+    .getByRole("button")
+    .filter({ hasText: /upload/i })
+    .first();
+  await expect(uploadButton).toBeVisible({ timeout: 5_000 });
+  await uploadButton.click();
+
+  const dialog = app.page.getByRole("dialog");
+  await expect(dialog).toBeVisible({ timeout: 5_000 });
+  return dialog;
+}
+
 test.describe("Face Library — collection selector @high", () => {
   test("selector shows named face collections", async ({ frigateApp }) => {
     await frigateApp.installDefaults({ faces: basicFacesMock() });
@@ -262,26 +282,110 @@ test.describe("Face Library — upload flow @high", () => {
     await frigateApp.installDefaults({ faces: basicFacesMock() });
     await frigateApp.goto("/faces");
 
-    // Navigate to the alice tab by opening the dropdown and clicking alice.
-    const menu = await openLibraryDropdown(frigateApp);
-    await menu
-      .locator('[role="menuitem"]')
-      .filter({ hasText: /alice/i })
-      .first()
-      .click();
+    const dialog = await openAliceUploadDialog(frigateApp);
+    const fileInput = dialog.locator('input[type="file"]');
+    await expect(fileInput).toHaveCount(1);
+    await expect(fileInput).toHaveAttribute("multiple", "");
+  });
 
-    // After switching to alice, the Upload Image button appears in the toolbar.
-    const uploadBtn = frigateApp.page
-      .getByRole("button")
-      .filter({ hasText: /upload/i })
-      .first();
-    await expect(uploadBtn).toBeVisible({ timeout: 5_000 });
-    await uploadBtn.click();
+  test("uploads selected images sequentially", async ({ frigateApp }) => {
+    let requestCount = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
 
-    // UploadImageDialog renders a file input + confirm button.
-    const dialog = frigateApp.page.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: 5_000 });
-    await expect(dialog.locator('input[type="file"]')).toHaveCount(1);
+    await frigateApp.installDefaults({ faces: basicFacesMock() });
+    await frigateApp.page.route(
+      "**/api/faces/alice/register",
+      async (route) => {
+        requestCount += 1;
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await route.fulfill({ json: { success: true } });
+        inFlight -= 1;
+      },
+    );
+    await frigateApp.goto("/faces");
+
+    const dialog = await openAliceUploadDialog(frigateApp);
+    await dialog.locator('input[type="file"]').setInputFiles([
+      {
+        name: "face-one.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("face-one"),
+      },
+      {
+        name: "face-two.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("face-two"),
+      },
+      {
+        name: "face-three.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("face-three"),
+      },
+    ]);
+
+    await expect(dialog.getByText("3 images selected")).toBeVisible();
+    await dialog.getByRole("button", { name: /save/i }).click();
+
+    await expect.poll(() => requestCount, { timeout: 5_000 }).toBe(3);
+    expect(maxInFlight).toBe(1);
+    await expect(dialog).not.toBeVisible();
+    await expect(
+      frigateApp.page.getByText("Successfully uploaded 3 images."),
+    ).toBeVisible();
+  });
+
+  test("continues after an image fails and reports the partial result", async ({
+    frigateApp,
+  }) => {
+    let requestCount = 0;
+
+    await frigateApp.installDefaults({ faces: basicFacesMock() });
+    await frigateApp.page.route(
+      "**/api/faces/alice/register",
+      async (route) => {
+        requestCount += 1;
+        if (requestCount === 2) {
+          await route.fulfill({
+            status: 400,
+            json: { success: false, message: "No face found" },
+          });
+          return;
+        }
+        await route.fulfill({ json: { success: true } });
+      },
+    );
+    await frigateApp.goto("/faces");
+
+    const dialog = await openAliceUploadDialog(frigateApp);
+    await dialog.locator('input[type="file"]').setInputFiles([
+      {
+        name: "face-one.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("face-one"),
+      },
+      {
+        name: "face-two.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("face-two"),
+      },
+      {
+        name: "face-three.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("face-three"),
+      },
+    ]);
+    await dialog.getByRole("button", { name: /save/i }).click();
+
+    await expect.poll(() => requestCount, { timeout: 5_000 }).toBe(3);
+    await expect(dialog).not.toBeVisible();
+    await expect(
+      frigateApp.page.getByText(
+        "Uploaded 2 of 3 images. face-two.png failed: No face found.",
+      ),
+    ).toBeVisible();
   });
 });
 

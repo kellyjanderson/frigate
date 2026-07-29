@@ -115,37 +115,87 @@ export default function FaceLibrary() {
   // upload
 
   const [upload, setUpload] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
   const [addFace, setAddFace] = useState(false);
 
   // input focus for keyboard shortcuts
   const onUploadImage = useCallback(
-    (file: File) => {
-      const formData = new FormData();
-      formData.append("file", file);
-      axios
-        .post(`faces/${pageToggle}/register`, formData, {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        })
-        .then((resp) => {
+    async (files: File[]) => {
+      setUploadProgress({ completed: 0, total: files.length });
+
+      let successful = 0;
+      const failures: { fileName: string; errorMessage: string }[] = [];
+
+      // Face registration uses one shared ZMQ REQ socket, so requests must
+      // complete in order instead of running concurrently.
+      for (const [index, file] of files.entries()) {
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+          const resp = await axios.post(
+            `faces/${pageToggle}/register`,
+            formData,
+            {
+              headers: {
+                "Content-Type": "multipart/form-data",
+              },
+            },
+          );
+
           if (resp.status == 200) {
-            setUpload(false);
-            refreshFaces();
-            toast.success(t("toast.success.uploadedImage"), {
-              position: "top-center",
-            });
+            successful += 1;
           }
-        })
-        .catch((error) => {
+        } catch (error) {
           const errorMessage =
-            error.response?.data?.message ||
-            error.response?.data?.detail ||
-            "Unknown error";
-          toast.error(t("toast.error.uploadingImageFailed", { errorMessage }), {
-            position: "top-center",
+            (axios.isAxiosError(error) &&
+              (error.response?.data?.message ||
+                error.response?.data?.detail)) ||
+            t("toast.error.unknownError");
+          failures.push({
+            fileName: file.name,
+            errorMessage,
           });
-        });
+        } finally {
+          setUploadProgress({
+            completed: index + 1,
+            total: files.length,
+          });
+        }
+      }
+
+      if (successful > 0) {
+        refreshFaces();
+      }
+
+      setUpload(false);
+      setUploadProgress(null);
+
+      if (failures.length === 0) {
+        toast.success(
+          t("toast.success.uploadedImages", { count: successful }),
+          {
+            position: "top-center",
+          },
+        );
+      } else {
+        const firstFailure = failures[0];
+        toast.error(
+          t("toast.error.uploadingImagesFailed", {
+            successful,
+            total: files.length,
+            fileName: firstFailure.fileName,
+            errorMessage: firstFailure.errorMessage,
+            count: failures.length - 1,
+          }),
+          {
+            position: "top-center",
+          },
+        );
+      }
     },
     [pageToggle, refreshFaces, t],
   );
@@ -382,6 +432,7 @@ export default function FaceLibrary() {
         description={t("uploadFaceImage.desc", { pageToggle })}
         setOpen={setUpload}
         onSave={onUploadImage}
+        progress={uploadProgress}
       />
 
       <CreateFaceWizardDialog

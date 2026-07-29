@@ -8,70 +8,88 @@ import {
 } from "@/components/ui/form";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { LuUpload, LuX } from "react-icons/lu";
 import { z } from "zod";
 
-type ImageEntryProps = {
-  onSave: (file: File) => void;
+type BaseImageEntryProps = {
   children?: React.ReactNode;
   maxSize?: number;
   accept?: Record<string, string[]>;
 };
 
-export default function ImageEntry({
-  onSave,
-  children,
-  maxSize = 20 * 1024 * 1024, // 20MB default
-  accept = { "image/*": [".jpeg", ".jpg", ".png", ".gif", ".webp"] },
-}: ImageEntryProps) {
+type ImageEntryProps = BaseImageEntryProps &
+  (
+    | {
+        multiple: true;
+        onSave: (files: File[]) => void;
+      }
+    | {
+        multiple?: false;
+        onSave: (file: File) => void;
+      }
+  );
+
+export default function ImageEntry(props: ImageEntryProps) {
+  const {
+    children,
+    maxSize = 20 * 1024 * 1024, // 20MB default
+    accept = { "image/*": [".jpeg", ".jpg", ".png", ".gif", ".webp"] },
+    multiple = false,
+  } = props;
   const { t } = useTranslation(["views/faceLibrary"]);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const dropzoneRef = useRef<HTMLDivElement>(null);
+  const previews = useMemo(
+    () => selectedFiles.map((file) => URL.createObjectURL(file)),
+    [selectedFiles],
+  );
 
   // Auto focus the dropzone
   useEffect(() => {
-    if (dropzoneRef.current && !preview) {
+    if (dropzoneRef.current && selectedFiles.length === 0) {
       dropzoneRef.current.focus();
     }
-  }, [preview]);
+  }, [selectedFiles]);
 
-  // Clean up preview URL on unmount or preview change
+  // Release preview URLs when the selected files change or the component
+  // unmounts.
   useEffect(() => {
-    return () => {
-      if (preview) {
-        URL.revokeObjectURL(preview);
-      }
-    };
-  }, [preview]);
+    return () => previews.forEach((url) => URL.revokeObjectURL(url));
+  }, [previews]);
 
   const formSchema = z.object({
-    file: z
-      .instanceof(File, { message: t("imageEntry.validation.selectImage") })
-      .refine((file) =>
-        accept["image/*"].includes(`.${file.type.split("/")[1]}`),
-      ),
+    files: z
+      .array(z.instanceof(File))
+      .min(1, { message: t("imageEntry.validation.selectImage") }),
   });
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
+    defaultValues: {
+      files: [],
+    },
   });
+
+  const updateFiles = useCallback(
+    (files: File[]) => {
+      const nextFiles = multiple ? files : files.slice(0, 1);
+      setSelectedFiles(nextFiles);
+      form.setValue("files", nextFiles, { shouldValidate: true });
+    },
+    [form, multiple],
+  );
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
       if (acceptedFiles.length > 0) {
-        const file = acceptedFiles[0];
-        form.setValue("file", file, { shouldValidate: true });
-
-        // Create preview
-        const objectUrl = URL.createObjectURL(file);
-        setPreview(objectUrl);
+        updateFiles(acceptedFiles);
       }
     },
-    [form],
+    [updateFiles],
   );
 
   const { getRootProps, getInputProps, isDragActive, isDragReject } =
@@ -79,13 +97,15 @@ export default function ImageEntry({
       onDrop,
       maxSize,
       accept,
-      multiple: false,
+      multiple,
     });
 
   const handlePaste = useCallback(
     (event: React.ClipboardEvent<HTMLDivElement>) => {
       event.preventDefault();
       const clipboardItems = Array.from(event.clipboardData.items);
+      const pastedFiles: File[] = [];
+
       for (const item of clipboardItems) {
         if (item.type.startsWith("image/")) {
           const blob = item.getAsFile();
@@ -94,30 +114,36 @@ export default function ImageEntry({
             const extension = `.${mimeType}`;
             if (accept["image/*"].includes(extension)) {
               const fileName = blob.name || `pasted-image.${mimeType}`;
-              const file = new File([blob], fileName, { type: blob.type });
-              form.setValue("file", file, { shouldValidate: true });
-              const objectUrl = URL.createObjectURL(file);
-              setPreview(objectUrl);
-              return; // Take the first valid image
+              pastedFiles.push(new File([blob], fileName, { type: blob.type }));
+
+              if (!multiple) {
+                break;
+              }
             }
           }
         }
       }
+
+      if (pastedFiles.length > 0) {
+        updateFiles(pastedFiles);
+      }
     },
-    [form, maxSize, accept],
+    [accept, maxSize, multiple, updateFiles],
   );
 
   const onSubmit = useCallback(
     (data: z.infer<typeof formSchema>) => {
-      if (!data.file) return;
-      onSave(data.file);
+      if (props.multiple) {
+        props.onSave(data.files);
+      } else {
+        props.onSave(data.files[0]);
+      }
     },
-    [onSave],
+    [props],
   );
 
-  const clearSelection = () => {
-    form.reset();
-    setPreview(null);
+  const removeSelection = (index: number) => {
+    updateFiles(selectedFiles.filter((_, fileIndex) => fileIndex !== index));
   };
 
   return (
@@ -125,7 +151,7 @@ export default function ImageEntry({
       <form onSubmit={form.handleSubmit(onSubmit)}>
         <FormField
           control={form.control}
-          name="file"
+          name="files"
           render={() => (
             <FormItem>
               <FormControl>
@@ -135,7 +161,7 @@ export default function ImageEntry({
                   tabIndex={0}
                   ref={dropzoneRef}
                 >
-                  {!preview ? (
+                  {previews.length === 0 ? (
                     <div
                       {...getRootProps()}
                       className={cn(
@@ -149,30 +175,87 @@ export default function ImageEntry({
                       <LuUpload className="mb-2 h-10 w-10 text-muted-foreground" />
                       <p className="text-center text-sm text-muted-foreground">
                         {isDragActive
-                          ? t("imageEntry.dropActive")
-                          : t("imageEntry.dropInstructions")}
+                          ? t(
+                              multiple
+                                ? "imageEntry.dropActiveMultiple"
+                                : "imageEntry.dropActive",
+                            )
+                          : t(
+                              multiple
+                                ? "imageEntry.dropInstructionsMultiple"
+                                : "imageEntry.dropInstructions",
+                            )}
                       </p>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {t("imageEntry.maxSize", {
-                          size: Math.round(maxSize / (1024 * 1024)),
+                        {t(
+                          multiple
+                            ? "imageEntry.maxSizeMultiple"
+                            : "imageEntry.maxSize",
+                          {
+                            size: Math.round(maxSize / (1024 * 1024)),
+                          },
+                        )}
+                      </p>
+                    </div>
+                  ) : multiple ? (
+                    <div className="flex h-40 flex-col gap-2">
+                      <p
+                        className="text-sm text-muted-foreground"
+                        aria-live="polite"
+                      >
+                        {t("imageEntry.selectedImages", {
+                          count: selectedFiles.length,
                         })}
                       </p>
+                      <div className="grid min-h-0 flex-1 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3">
+                        {previews.map((preview, index) => (
+                          <div
+                            className="relative h-24 min-w-0"
+                            key={`${selectedFiles[index].name}-${index}`}
+                          >
+                            <img
+                              src={preview}
+                              alt={t("imageEntry.previewAlt", {
+                                fileName: selectedFiles[index].name,
+                              })}
+                              className="h-full w-full rounded-lg border object-contain"
+                            />
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              size="icon"
+                              className="absolute right-1 top-1 size-8 rounded-full"
+                              aria-label={t("imageEntry.removeImage", {
+                                fileName: selectedFiles[index].name,
+                              })}
+                              onClick={() => removeSelection(index)}
+                            >
+                              <LuX className="size-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ) : (
                     <div className="relative h-40 w-full">
                       <img
-                        src={preview}
-                        alt="Preview"
+                        src={previews[0]}
+                        alt={t("imageEntry.previewAlt", {
+                          fileName: selectedFiles[0].name,
+                        })}
                         className="h-full w-full rounded-lg border object-contain"
                       />
                       <Button
                         type="button"
                         variant="destructive"
                         size="icon"
-                        className="absolute right-2 top-2 size-5 rounded-full"
-                        onClick={clearSelection}
+                        className="absolute right-2 top-2 size-8 rounded-full"
+                        aria-label={t("imageEntry.removeImage", {
+                          fileName: selectedFiles[0].name,
+                        })}
+                        onClick={() => removeSelection(0)}
                       >
-                        <LuX className="size-3" />
+                        <LuX className="size-4" />
                       </Button>
                     </div>
                   )}
