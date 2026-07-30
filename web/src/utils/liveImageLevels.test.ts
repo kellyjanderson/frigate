@@ -24,7 +24,9 @@ describe("live image levels", () => {
     const table = parseTable(
       createLiveImageLevelsTable({
         blackPoint: 64,
-        midtones: 1,
+        shadowPoint: 96,
+        midtonePoint: 128,
+        highlightPoint: 160,
         whitePoint: 192,
       }),
     );
@@ -36,18 +38,22 @@ describe("live image levels", () => {
     expect(table[193]).toBe(1);
   });
 
-  it("uses standard levels gamma to brighten or darken midtones", () => {
+  it("uses five ordered tonal anchors to brighten or darken regions", () => {
     const brighter = parseTable(
       createLiveImageLevelsTable({
         blackPoint: 0,
-        midtones: 2,
+        shadowPoint: 32,
+        midtonePoint: 96,
+        highlightPoint: 176,
         whitePoint: 255,
       }),
     );
     const darker = parseTable(
       createLiveImageLevelsTable({
         blackPoint: 0,
-        midtones: 0.5,
+        shadowPoint: 80,
+        midtonePoint: 160,
+        highlightPoint: 224,
         whitePoint: 255,
       }),
     );
@@ -60,13 +66,27 @@ describe("live image levels", () => {
     expect(
       normalizeLiveImageLevels({
         blackPoint: 300,
-        midtones: 0,
+        shadowPoint: -20,
+        midtonePoint: -10,
+        highlightPoint: -5,
         whitePoint: -10,
       }),
     ).toEqual({
-      blackPoint: 254,
-      midtones: 0.1,
+      blackPoint: 251,
+      shadowPoint: 252,
+      midtonePoint: 253,
+      highlightPoint: 254,
       whitePoint: 255,
     });
+  });
+
+  it("migrates the previous three-point gamma values", () => {
+    expect(
+      normalizeLiveImageLevels({
+        blackPoint: 0,
+        midtones: 1,
+        whitePoint: 255,
+      }),
+    ).toEqual(DEFAULT_LIVE_IMAGE_LEVELS);
   });
 });

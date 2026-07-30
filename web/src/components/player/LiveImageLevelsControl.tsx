@@ -1,13 +1,11 @@
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
 import { LiveImageLevels } from "@/types/live";
 import {
   DEFAULT_LIVE_IMAGE_LEVELS,
   isDefaultLiveImageLevels,
   normalizeLiveImageLevels,
 } from "@/utils/liveImageLevels";
-import { useId } from "react";
+import * as SliderPrimitive from "@radix-ui/react-slider";
 import { useTranslation } from "react-i18next";
 
 type LiveImageLevelsControlProps = {
@@ -22,45 +20,38 @@ export default function LiveImageLevelsControl({
   disabled = false,
 }: LiveImageLevelsControlProps) {
   const { t } = useTranslation(["views/live", "common"]);
-  const id = useId().replaceAll(":", "");
   const normalized = normalizeLiveImageLevels(levels);
 
-  const updateLevels = (update: Partial<LiveImageLevels>) => {
-    onChange(normalizeLiveImageLevels({ ...normalized, ...update }));
-  };
-
-  const controls = [
+  const handles = [
     {
       key: "blackPoint",
       label: t("levels.blackPoint"),
       value: normalized.blackPoint,
-      minimum: 0,
-      maximum: normalized.whitePoint - 1,
-      step: 1,
-      displayValue: normalized.blackPoint.toString(),
     },
     {
-      key: "midtones",
+      key: "shadowPoint",
+      label: t("levels.shadows"),
+      value: normalized.shadowPoint,
+    },
+    {
+      key: "midtonePoint",
       label: t("levels.midtones"),
-      value: normalized.midtones,
-      minimum: 0.1,
-      maximum: 4,
-      step: 0.05,
-      displayValue: normalized.midtones.toFixed(2),
+      value: normalized.midtonePoint,
+    },
+    {
+      key: "highlightPoint",
+      label: t("levels.highlights"),
+      value: normalized.highlightPoint,
     },
     {
       key: "whitePoint",
       label: t("levels.whitePoint"),
       value: normalized.whitePoint,
-      minimum: normalized.blackPoint + 1,
-      maximum: 255,
-      step: 1,
-      displayValue: normalized.whitePoint.toString(),
     },
   ] as const;
 
   return (
-    <div className="flex min-w-64 flex-col gap-4">
+    <div className="flex min-w-64 flex-col gap-3">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-sm font-medium">{t("levels.title")}</div>
@@ -79,37 +70,54 @@ export default function LiveImageLevelsControl({
           {t("button.reset", { ns: "common" })}
         </Button>
       </div>
-      {controls.map((control) => {
-        const labelId = `${id}-${control.key}-label`;
-        const valueId = `${id}-${control.key}-value`;
-
-        return (
-          <div className="flex flex-col gap-2" key={control.key}>
-            <div className="flex items-center justify-between gap-3">
-              <Label id={labelId}>{control.label}</Label>
-              <output
-                aria-live="off"
-                className="w-12 text-right font-mono text-xs tabular-nums text-muted-foreground"
-                id={valueId}
-              >
-                {control.displayValue}
-              </output>
-            </div>
-            <Slider
-              aria-labelledby={labelId}
-              aria-describedby={valueId}
-              disabled={disabled}
-              max={control.maximum}
-              min={control.minimum}
-              step={control.step}
-              value={[control.value]}
-              onValueChange={([value]) =>
-                updateLevels({ [control.key]: value })
-              }
-            />
+      <SliderPrimitive.Root
+        aria-label={t("levels.title")}
+        className="relative flex h-28 w-full touch-none select-none items-end px-2"
+        disabled={disabled}
+        max={255}
+        min={0}
+        minStepsBetweenThumbs={1}
+        step={1}
+        value={handles.map(({ value }) => value)}
+        onValueChange={(values) =>
+          onChange(
+            normalizeLiveImageLevels({
+              blackPoint: values[0],
+              shadowPoint: values[1],
+              midtonePoint: values[2],
+              highlightPoint: values[3],
+              whitePoint: values[4],
+            }),
+          )
+        }
+      >
+        <SliderPrimitive.Track className="absolute inset-x-2 bottom-5 top-0 overflow-hidden rounded-md border border-border bg-gradient-to-r from-black via-zinc-500 to-white">
+          <span className="absolute inset-0 bg-[linear-gradient(to_right,transparent_24.8%,hsl(var(--border))_25%,transparent_25.2%,transparent_49.8%,hsl(var(--border))_50%,transparent_50.2%,transparent_74.8%,hsl(var(--border))_75%,transparent_75.2%)] opacity-70" />
+        </SliderPrimitive.Track>
+        {handles.map(({ key, label, value }) => (
+          <SliderPrimitive.Thumb
+            aria-label={label}
+            aria-valuetext={`${label}: ${value}`}
+            className="group relative block h-28 w-11 cursor-ew-resize touch-none focus-visible:outline-none disabled:cursor-not-allowed"
+            key={key}
+          >
+            <span className="absolute bottom-5 left-1/2 top-0 w-0.5 -translate-x-1/2 bg-primary shadow-[0_0_1px_1px_hsl(var(--background))] group-data-[disabled]:opacity-40" />
+            <span className="absolute bottom-0 left-1/2 size-5 -translate-x-1/2 rounded-full border-2 border-background bg-primary shadow-md group-focus-visible:ring-2 group-focus-visible:ring-ring group-focus-visible:ring-offset-2 group-data-[disabled]:opacity-40" />
+          </SliderPrimitive.Thumb>
+        ))}
+      </SliderPrimitive.Root>
+      <div className="grid grid-cols-5 gap-1" aria-hidden="true">
+        {handles.map(({ key, label, value }) => (
+          <div
+            className="min-w-0 text-center text-[10px] leading-tight text-muted-foreground"
+            key={key}
+            title={label}
+          >
+            <div className="truncate">{label}</div>
+            <output className="font-mono tabular-nums">{value}</output>
           </div>
-        );
-      })}
+        ))}
+      </div>
     </div>
   );
 }

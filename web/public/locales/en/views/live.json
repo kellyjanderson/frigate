@@ -124,9 +124,11 @@
   "audio": "Audio",
   "levels": {
     "title": "Levels",
-    "description": "Adjust the displayed tonal range without changing recordings.",
+    "description": "Drag the five handles to reshape the displayed tonal range without changing recordings.",
     "blackPoint": "Black point",
+    "shadows": "Shadows",
     "midtones": "Midtones",
+    "highlights": "Highlights",
     "whitePoint": "White point",
     "reset": "Reset levels"
   },

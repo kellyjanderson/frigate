@@ -137,7 +137,7 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     await expect(menu).not.toBeVisible({ timeout: 3_000 });
   });
 
-  test("levels control previews and persists a midtone adjustment", async ({
+  test("five-point levels control previews and persists a midtone adjustment", async ({
     frigateApp,
   }) => {
     await frigateApp.goto("/#front_door");
@@ -156,10 +156,10 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
 
     let menu = await openSettings();
     const midtones = menu.getByRole("slider", { name: "Midtones" });
-    await expect(midtones).toHaveAttribute("aria-valuenow", "1");
+    await expect(midtones).toHaveAttribute("aria-valuenow", "128");
     await midtones.focus();
     await midtones.press("ArrowRight");
-    await expect(midtones).toHaveAttribute("aria-valuenow", "1.05");
+    await expect(midtones).toHaveAttribute("aria-valuenow", "129");
 
     await expect
       .poll(() =>
@@ -173,6 +173,47 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
       )
       .toBe(true);
 
+    await expect
+      .poll(() =>
+        frigateApp.page.evaluate(
+          () =>
+            new Promise<number | null>((resolve, reject) => {
+              const openRequest = indexedDB.open("keyval-store");
+              openRequest.onerror = () => reject(openRequest.error);
+              openRequest.onsuccess = () => {
+                const database = openRequest.result;
+                const transaction = database.transaction("keyval", "readonly");
+                const cursorRequest = transaction
+                  .objectStore("keyval")
+                  .openCursor();
+
+                cursorRequest.onerror = () => reject(cursorRequest.error);
+                cursorRequest.onsuccess = () => {
+                  const cursor = cursorRequest.result;
+
+                  if (!cursor) {
+                    database.close();
+                    resolve(null);
+                    return;
+                  }
+
+                  if (String(cursor.key).startsWith("front_door-live-levels")) {
+                    const persistedLevels = cursor.value as {
+                      midtonePoint?: number;
+                    };
+                    database.close();
+                    resolve(persistedLevels.midtonePoint ?? null);
+                    return;
+                  }
+
+                  cursor.continue();
+                };
+              };
+            }),
+        ),
+      )
+      .toBe(129);
+
     await frigateApp.page.keyboard.press("Escape");
     await frigateApp.page.reload();
     await expect(live.backButton).toBeVisible({ timeout: 10_000 });
@@ -180,7 +221,7 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     menu = await openSettings();
     await expect(
       menu.getByRole("slider", { name: "Midtones" }),
-    ).toHaveAttribute("aria-valuenow", "1.05");
+    ).toHaveAttribute("aria-valuenow", "129");
   });
 });
 
@@ -323,7 +364,13 @@ test.describe("Live mobile layout @critical @mobile", () => {
       frigateApp.page.getByRole("slider", { name: "Black point" }),
     ).toBeVisible();
     await expect(
+      frigateApp.page.getByRole("slider", { name: "Shadows" }),
+    ).toBeVisible();
+    await expect(
       frigateApp.page.getByRole("slider", { name: "Midtones" }),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "Highlights" }),
     ).toBeVisible();
     await expect(
       frigateApp.page.getByRole("slider", { name: "White point" }),

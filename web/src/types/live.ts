@@ -39,7 +39,9 @@ export type VolumeState = Record<string, number>;
 
 export type LiveImageLevels = {
   blackPoint: number;
-  midtones: number;
+  shadowPoint: number;
+  midtonePoint: number;
+  highlightPoint: number;
   whitePoint: number;
 };
 
