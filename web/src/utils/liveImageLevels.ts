@@ -21,6 +21,7 @@ const LEVEL_KEYS = [
   "highlightPoint",
   "whitePoint",
 ] as const;
+export type LiveImageLevelKey = (typeof LEVEL_KEYS)[number];
 
 const OUTPUT_POINTS = LEVEL_KEYS.map(
   (key) => DEFAULT_LIVE_IMAGE_LEVELS[key] / 255,
@@ -86,6 +87,24 @@ export function isDefaultLiveImageLevels(levels: LiveImageLevels) {
   return LEVEL_KEYS.every(
     (key) => normalized[key] === DEFAULT_LIVE_IMAGE_LEVELS[key],
   );
+}
+
+export function updateLiveImageLevelPoint(
+  levels: LiveImageLevels,
+  key: LiveImageLevelKey,
+  value: number,
+): LiveImageLevels {
+  const normalized = normalizeLiveImageLevels(levels);
+  const keyIndex = LEVEL_KEYS.indexOf(key);
+  const minimum = keyIndex === 0 ? 0 : normalized[LEVEL_KEYS[keyIndex - 1]] + 1;
+  const maximum =
+    keyIndex === LEVEL_KEYS.length - 1
+      ? 255
+      : normalized[LEVEL_KEYS[keyIndex + 1]] - 1;
+  const updated = { ...normalized };
+  updated[key] = Math.round(clamp(value, minimum, maximum));
+
+  return updated;
 }
 
 export function createLiveImageLevelsTable(

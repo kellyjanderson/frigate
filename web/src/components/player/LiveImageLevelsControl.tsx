@@ -4,8 +4,10 @@ import {
   DEFAULT_LIVE_IMAGE_LEVELS,
   isDefaultLiveImageLevels,
   normalizeLiveImageLevels,
+  updateLiveImageLevelPoint,
 } from "@/utils/liveImageLevels";
 import * as SliderPrimitive from "@radix-ui/react-slider";
+import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 type LiveImageLevelsControlProps = {
@@ -21,6 +23,8 @@ export default function LiveImageLevelsControl({
 }: LiveImageLevelsControlProps) {
   const { t } = useTranslation(["views/live", "common"]);
   const normalized = normalizeLiveImageLevels(levels);
+  const activeHandleIndexRef = useRef(0);
+  const isPointerDraggingRef = useRef(false);
 
   const handles = [
     {
@@ -73,35 +77,90 @@ export default function LiveImageLevelsControl({
       <SliderPrimitive.Root
         aria-label={t("levels.title")}
         className="relative flex h-28 w-full touch-none select-none items-end px-2"
+        data-levels-control
         disabled={disabled}
         max={255}
         min={0}
-        minStepsBetweenThumbs={1}
         step={1}
         value={handles.map(({ value }) => value)}
-        onValueChange={(values) =>
+        onPointerDown={(event) => {
+          if (event.target === event.currentTarget) {
+            event.preventDefault();
+          }
+        }}
+        onPointerCancel={() => {
+          isPointerDraggingRef.current = false;
+        }}
+        onPointerUp={() => {
+          isPointerDraggingRef.current = false;
+        }}
+        onValueChange={(values) => {
+          const handleIndex = activeHandleIndexRef.current;
+          const handle = handles[handleIndex];
           onChange(
-            normalizeLiveImageLevels({
-              blackPoint: values[0],
-              shadowPoint: values[1],
-              midtonePoint: values[2],
-              highlightPoint: values[3],
-              whitePoint: values[4],
-            }),
-          )
-        }
+            updateLiveImageLevelPoint(
+              normalized,
+              handle.key,
+              values[handleIndex],
+            ),
+          );
+        }}
       >
-        <SliderPrimitive.Track className="absolute inset-x-2 bottom-5 top-0 overflow-hidden rounded-md border border-border bg-gradient-to-r from-black via-zinc-500 to-white">
+        <SliderPrimitive.Track
+          className="pointer-events-none absolute inset-x-2 bottom-5 top-0 overflow-hidden rounded-md border border-border bg-gradient-to-r from-black via-zinc-500 to-white"
+          data-levels-track
+        >
           <span className="absolute inset-0 bg-[linear-gradient(to_right,transparent_24.8%,hsl(var(--border))_25%,transparent_25.2%,transparent_49.8%,hsl(var(--border))_50%,transparent_50.2%,transparent_74.8%,hsl(var(--border))_75%,transparent_75.2%)] opacity-70" />
         </SliderPrimitive.Track>
-        {handles.map(({ key, label, value }) => (
+        <svg
+          aria-hidden="true"
+          className="pointer-events-none absolute left-2 top-0 overflow-visible"
+          preserveAspectRatio="none"
+          style={{
+            width: "calc(100% - 1rem)",
+            height: "calc(100% - 0.625rem)",
+          }}
+          viewBox="0 0 255 100"
+        >
+          {handles.map(({ key, value }) => (
+            <g data-level-guide={key} key={key}>
+              <line
+                stroke="hsl(var(--background))"
+                strokeWidth="4"
+                vectorEffect="non-scaling-stroke"
+                x1={DEFAULT_LIVE_IMAGE_LEVELS[key]}
+                x2={value}
+                y1="0"
+                y2="100"
+              />
+              <line
+                stroke="hsl(var(--primary))"
+                strokeWidth="2"
+                vectorEffect="non-scaling-stroke"
+                x1={DEFAULT_LIVE_IMAGE_LEVELS[key]}
+                x2={value}
+                y1="0"
+                y2="100"
+              />
+            </g>
+          ))}
+        </svg>
+        {handles.map(({ key, label, value }, handleIndex) => (
           <SliderPrimitive.Thumb
             aria-label={label}
             aria-valuetext={`${label}: ${value}`}
-            className="group relative block h-28 w-11 cursor-ew-resize touch-none focus-visible:outline-none disabled:cursor-not-allowed"
+            className="group relative block size-11 cursor-ew-resize touch-none focus-visible:outline-none disabled:cursor-not-allowed"
             key={key}
+            onFocus={() => {
+              if (!isPointerDraggingRef.current) {
+                activeHandleIndexRef.current = handleIndex;
+              }
+            }}
+            onPointerDown={() => {
+              activeHandleIndexRef.current = handleIndex;
+              isPointerDraggingRef.current = true;
+            }}
           >
-            <span className="absolute bottom-5 left-1/2 top-0 w-0.5 -translate-x-1/2 bg-primary shadow-[0_0_1px_1px_hsl(var(--background))] group-data-[disabled]:opacity-40" />
             <span className="absolute bottom-0 left-1/2 size-5 -translate-x-1/2 rounded-full border-2 border-background bg-primary shadow-md group-focus-visible:ring-2 group-focus-visible:ring-ring group-focus-visible:ring-offset-2 group-data-[disabled]:opacity-40" />
           </SliderPrimitive.Thumb>
         ))}

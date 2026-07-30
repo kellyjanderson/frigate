@@ -2,6 +2,7 @@ import {
   createLiveImageLevelsTable,
   DEFAULT_LIVE_IMAGE_LEVELS,
   normalizeLiveImageLevels,
+  updateLiveImageLevelPoint,
 } from "./liveImageLevels";
 import { describe, expect, it } from "vitest";
 
@@ -88,5 +89,20 @@ describe("live image levels", () => {
         whitePoint: 255,
       }),
     ).toEqual(DEFAULT_LIVE_IMAGE_LEVELS);
+  });
+
+  it("stops each point at its neighbors without moving them", () => {
+    expect(
+      updateLiveImageLevelPoint(DEFAULT_LIVE_IMAGE_LEVELS, "shadowPoint", 200),
+    ).toEqual({
+      ...DEFAULT_LIVE_IMAGE_LEVELS,
+      shadowPoint: 127,
+    });
+    expect(
+      updateLiveImageLevelPoint(DEFAULT_LIVE_IMAGE_LEVELS, "midtonePoint", 0),
+    ).toEqual({
+      ...DEFAULT_LIVE_IMAGE_LEVELS,
+      midtonePoint: 65,
+    });
   });
 });

@@ -155,7 +155,40 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     };
 
     let menu = await openSettings();
+    const shadows = menu.getByRole("slider", { name: "Shadows" });
     const midtones = menu.getByRole("slider", { name: "Midtones" });
+    const shadowsBox = await shadows.boundingBox();
+    const sliderBox = await menu.locator("[data-levels-track]").boundingBox();
+    expect(shadowsBox).not.toBeNull();
+    expect(sliderBox).not.toBeNull();
+    await frigateApp.page.mouse.move(
+      shadowsBox!.x + shadowsBox!.width / 2,
+      shadowsBox!.y + shadowsBox!.height / 2,
+    );
+    await frigateApp.page.mouse.down();
+    await frigateApp.page.mouse.move(
+      sliderBox!.x + sliderBox!.width + shadowsBox!.width,
+      shadowsBox!.y + shadowsBox!.height / 2,
+      { steps: 10 },
+    );
+    await frigateApp.page.mouse.up();
+    expect(Number(await shadows.getAttribute("aria-valuenow"))).toBeLessThan(
+      128,
+    );
+    await expect(midtones).toHaveAttribute("aria-valuenow", "128");
+    for (let step = 0; step < 20; step += 1) {
+      await shadows.press("ArrowRight");
+    }
+    await expect(shadows).toHaveAttribute("aria-valuenow", "127");
+    await shadows.press("ArrowRight");
+    await expect(shadows).toHaveAttribute("aria-valuenow", "127");
+
+    const shadowGuide = menu
+      .locator('[data-level-guide="shadowPoint"] line')
+      .last();
+    await expect(shadowGuide).toHaveAttribute("x1", "64");
+    await expect(shadowGuide).toHaveAttribute("x2", "127");
+
     await expect(midtones).toHaveAttribute("aria-valuenow", "128");
     await midtones.focus();
     await midtones.press("ArrowRight");
