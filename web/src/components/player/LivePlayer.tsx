@@ -106,7 +106,15 @@ export default function LivePlayer({
     DEFAULT_LIVE_IMAGE_LEVELS,
   );
   const effectiveLevels = normalizeLiveImageLevels(levels ?? persistedLevels);
-  const levelsFilterId = `live-levels-${useId().replaceAll(":", "")}`;
+  const levelsFilterInstanceId = useId().replaceAll(":", "");
+  const levelsFilterValueId = [
+    effectiveLevels.blackPoint,
+    effectiveLevels.shadowPoint,
+    effectiveLevels.midtonePoint,
+    effectiveLevels.highlightPoint,
+    effectiveLevels.whitePoint,
+  ].join("-");
+  const levelsFilterId = `live-levels-${levelsFilterInstanceId}-${levelsFilterValueId}`;
   const mediaStyle = useMemo<React.CSSProperties>(
     () =>
       isDefaultLiveImageLevels(effectiveLevels)

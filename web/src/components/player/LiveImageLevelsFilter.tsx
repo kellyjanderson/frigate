@@ -23,6 +23,7 @@ export default function LiveImageLevelsFilter({
       focusable="false"
     >
       <filter
+        key={filterId}
         id={filterId}
         colorInterpolationFilters="sRGB"
         x="0"

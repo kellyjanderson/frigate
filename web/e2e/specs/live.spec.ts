@@ -173,6 +173,20 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
       )
       .toBe(true);
 
+    const filteredMedia = frigateApp.page
+      .locator("#player-container video, #player-container canvas")
+      .first();
+    const firstFilter = await filteredMedia.evaluate(
+      (element) => getComputedStyle(element).filter,
+    );
+    await midtones.press("ArrowRight");
+    await expect(midtones).toHaveAttribute("aria-valuenow", "130");
+    await expect
+      .poll(() =>
+        filteredMedia.evaluate((element) => getComputedStyle(element).filter),
+      )
+      .not.toBe(firstFilter);
+
     await expect
       .poll(() =>
         frigateApp.page.evaluate(
@@ -212,7 +226,7 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
             }),
         ),
       )
-      .toBe(129);
+      .toBe(130);
 
     await frigateApp.page.keyboard.press("Escape");
     await frigateApp.page.reload();
@@ -221,7 +235,7 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     menu = await openSettings();
     await expect(
       menu.getByRole("slider", { name: "Midtones" }),
-    ).toHaveAttribute("aria-valuenow", "129");
+    ).toHaveAttribute("aria-valuenow", "130");
   });
 });
 
