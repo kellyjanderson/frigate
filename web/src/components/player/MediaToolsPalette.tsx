@@ -30,17 +30,22 @@ export default function MediaToolsPalette() {
   const filterId = `media-tools-levels-${filterInstanceId}`;
   const launcherRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const wasOpenRef = useRef(false);
 
   const closePalette = useCallback(() => {
     setIsOpen(false);
-    requestAnimationFrame(() => launcherRef.current?.focus());
   }, []);
 
   useEffect(() => {
     if (!isOpen) {
+      if (wasOpenRef.current) {
+        wasOpenRef.current = false;
+        launcherRef.current?.focus();
+      }
       return;
     }
 
+    wasOpenRef.current = true;
     closeRef.current?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
