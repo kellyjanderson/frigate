@@ -122,12 +122,10 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     const live = new LivePage(frigateApp.page, true);
     await expect(live.backButton).toBeVisible({ timeout: 10_000 });
 
-    // The gear icon button is the last button-like element in the
-    // single-camera header. Clicking it opens a Radix dropdown.
-    const gearButtons = frigateApp.page.locator("button:has(svg)");
-    const count = await gearButtons.count();
-    expect(count).toBeGreaterThan(0);
-    await gearButtons.last().click();
+    await frigateApp.page
+      .getByRole("button", { name: /settings/i })
+      .first()
+      .click();
 
     const menu = frigateApp.page
       .locator('[role="menu"], [data-radix-menu-content]')
@@ -137,28 +135,31 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     await expect(menu).not.toBeVisible({ timeout: 3_000 });
   });
 
-  test("five-point levels control previews and persists a midtone adjustment", async ({
+  test("floating media tools previews and persists a five-point levels adjustment", async ({
     frigateApp,
   }) => {
     await frigateApp.goto("/#front_door");
     const live = new LivePage(frigateApp.page, true);
     await expect(live.backButton).toBeVisible({ timeout: 10_000 });
 
-    const openSettings = async () => {
-      const gearButtons = frigateApp.page.locator("button:has(svg)");
-      await gearButtons.last().click();
-      const menu = frigateApp.page
-        .locator('[role="menu"], [data-radix-menu-content]')
-        .first();
-      await expect(menu).toBeVisible({ timeout: 3_000 });
-      return menu;
+    const openPalette = async () => {
+      await frigateApp.page
+        .getByRole("button", { name: "Open media tools" })
+        .click();
+      const palette = frigateApp.page.getByRole("dialog", {
+        name: "Media tools",
+      });
+      await expect(palette).toBeVisible({ timeout: 3_000 });
+      return palette;
     };
 
-    let menu = await openSettings();
-    const shadows = menu.getByRole("slider", { name: "Shadows" });
-    const midtones = menu.getByRole("slider", { name: "Midtones" });
+    let palette = await openPalette();
+    const shadows = palette.getByRole("slider", { name: "Shadows" });
+    const midtones = palette.getByRole("slider", { name: "Midtones" });
     const shadowsBox = await shadows.boundingBox();
-    const sliderBox = await menu.locator("[data-levels-track]").boundingBox();
+    const sliderBox = await palette
+      .locator("[data-levels-track]")
+      .boundingBox();
     expect(shadowsBox).not.toBeNull();
     expect(sliderBox).not.toBeNull();
     await frigateApp.page.mouse.move(
@@ -183,7 +184,7 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     await shadows.press("ArrowRight");
     await expect(shadows).toHaveAttribute("aria-valuenow", "127");
 
-    const shadowGuide = menu
+    const shadowGuide = palette
       .locator('[data-level-guide="shadowPoint"] line')
       .last();
     await expect(shadowGuide).toHaveAttribute("x1", "64");
@@ -206,19 +207,15 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
       )
       .toBe(true);
 
-    const filteredMedia = frigateApp.page
-      .locator("#player-container video, #player-container canvas")
+    const transferFunction = frigateApp.page
+      .locator('filter[id^="media-tools-levels-"] feFuncR')
       .first();
-    const firstFilter = await filteredMedia.evaluate(
-      (element) => getComputedStyle(element).filter,
-    );
+    const firstTable = await transferFunction.getAttribute("tableValues");
     await midtones.press("ArrowRight");
     await expect(midtones).toHaveAttribute("aria-valuenow", "130");
     await expect
-      .poll(() =>
-        filteredMedia.evaluate((element) => getComputedStyle(element).filter),
-      )
-      .not.toBe(firstFilter);
+      .poll(() => transferFunction.getAttribute("tableValues"))
+      .not.toBe(firstTable);
 
     await expect
       .poll(() =>
@@ -244,7 +241,7 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
                     return;
                   }
 
-                  if (String(cursor.key).startsWith("front_door-live-levels")) {
+                  if (String(cursor.key).startsWith("media-tools-levels")) {
                     const persistedLevels = cursor.value as {
                       midtonePoint?: number;
                     };
@@ -262,13 +259,23 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
       .toBe(130);
 
     await frigateApp.page.keyboard.press("Escape");
+    await expect(palette).not.toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("button", { name: "Open media tools" }),
+    ).toBeFocused();
     await frigateApp.page.reload();
     await expect(live.backButton).toBeVisible({ timeout: 10_000 });
 
-    menu = await openSettings();
+    palette = await openPalette();
     await expect(
-      menu.getByRole("slider", { name: "Midtones" }),
+      palette.getByRole("slider", { name: "Midtones" }),
     ).toHaveAttribute("aria-valuenow", "130");
+
+    await frigateApp.page.keyboard.press("Escape");
+    await frigateApp.goto("/review");
+    await expect(
+      frigateApp.page.getByRole("button", { name: "Open media tools" }),
+    ).toBeVisible();
   });
 });
 
@@ -396,15 +403,14 @@ test.describe("Live mobile layout @critical @mobile", () => {
     await expect(frigateApp.page).toHaveURL(/#front_door/);
   });
 
-  test("mobile camera settings expose the levels control", async ({
+  test("mobile media tools expose the levels control", async ({
     frigateApp,
   }) => {
     test.skip(!frigateApp.isMobile, "Mobile-only");
     await frigateApp.goto("/#front_door");
 
     await frigateApp.page
-      .getByRole("button", { name: /settings/i })
-      .first()
+      .getByRole("button", { name: "Open media tools" })
       .click();
 
     await expect(

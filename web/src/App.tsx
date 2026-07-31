@@ -15,6 +15,7 @@ import useSWR from "swr";
 import { FrigateConfig } from "./types/frigateConfig";
 import ActivityIndicator from "@/components/indicators/activity-indicator";
 import { isRedirectingToLogin } from "@/api/auth-redirect";
+import MediaToolsPalette from "@/components/player/MediaToolsPalette";
 
 const Live = lazy(() => import("@/pages/Live"));
 const Events = lazy(() => import("@/pages/Events"));
@@ -112,6 +113,7 @@ function DefaultAppView() {
           </Routes>
         </Suspense>
       </div>
+      <MediaToolsPalette />
     </div>
   );
 }

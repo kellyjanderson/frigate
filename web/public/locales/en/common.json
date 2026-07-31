@@ -1,4 +1,10 @@
 {
+  "mediaTools": {
+    "title": "Media tools",
+    "description": "Display adjustments for images and video on this page.",
+    "open": "Open media tools",
+    "close": "Close media tools"
+  },
   "time": {
     "untilForTime": "Until {{time}}",
     "untilForRestart": "Until Frigate restarts.",

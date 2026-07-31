@@ -251,6 +251,7 @@ export default function JSMpegPlayer({
           <canvas
             ref={canvasRef}
             className="rounded-lg md:rounded-2xl"
+            data-media-tools-target
             style={{
               width: scaledWidth,
               height: scaledHeight,

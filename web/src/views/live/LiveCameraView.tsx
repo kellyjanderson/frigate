@@ -28,7 +28,6 @@ import { useResizeObserver } from "@/hooks/resize-observer";
 import useKeyboardListener from "@/hooks/use-keyboard-listener";
 import { CameraConfig, FrigateConfig } from "@/types/frigateConfig";
 import {
-  LiveImageLevels,
   LivePlayerError,
   LiveStreamMetadata,
   VideoResolutionType,
@@ -125,11 +124,6 @@ import {
 import ActivityIndicator from "@/components/indicators/activity-indicator";
 import { Stage, Layer, Rect } from "react-konva";
 import type { KonvaEventObject } from "konva/lib/Node";
-import LiveImageLevelsControl from "@/components/player/LiveImageLevelsControl";
-import {
-  DEFAULT_LIVE_IMAGE_LEVELS,
-  normalizeLiveImageLevels,
-} from "@/utils/liveImageLevels";
 
 /** Pixel threshold to distinguish drag from click. */
 const DRAG_MIN_PX = 15;
@@ -350,15 +344,6 @@ export default function LiveCameraView({
     `${camera.name}-background-play`,
     false,
   );
-  const [levels, setLevels] = useUserPersistence<LiveImageLevels>(
-    `${camera.name}-live-levels`,
-    DEFAULT_LIVE_IMAGE_LEVELS,
-  );
-  const normalizedLevels = useMemo(
-    () => normalizeLiveImageLevels(levels),
-    [levels],
-  );
-
   const [showStats, setShowStats] = useState(false);
   const [debug, setDebug] = useState(false);
 
@@ -700,8 +685,6 @@ export default function LiveCameraView({
               preferredLiveMode={preferredLiveMode}
               playInBackground={playInBackground ?? false}
               setPlayInBackground={setPlayInBackground}
-              levels={normalizedLevels}
-              setLevels={setLevels}
               showStats={showStats}
               setShowStats={setShowStats}
               isRestreamed={isRestreamed ?? false}
@@ -781,7 +764,6 @@ export default function LiveCameraView({
                   alwaysShowCameraName={false}
                   cameraConfig={camera}
                   playAudio={audio}
-                  levels={normalizedLevels}
                   playInBackground={playInBackground ?? false}
                   showStats={showStats}
                   micEnabled={mic}
@@ -850,8 +832,6 @@ type FrigateCameraFeaturesProps = {
   preferredLiveMode: string;
   playInBackground: boolean;
   setPlayInBackground: (value: boolean | undefined) => void;
-  levels: LiveImageLevels;
-  setLevels: (levels: LiveImageLevels | undefined) => void;
   showStats: boolean;
   setShowStats: (value: boolean) => void;
   isRestreamed: boolean;
@@ -874,8 +854,6 @@ function FrigateCameraFeatures({
   preferredLiveMode,
   playInBackground,
   setPlayInBackground,
-  levels,
-  setLevels,
   showStats,
   setShowStats,
   isRestreamed,
@@ -1194,7 +1172,9 @@ function FrigateCameraFeatures({
         />
         {!fullscreen && (
           <DropdownMenu>
-            <DropdownMenuTrigger>
+            <DropdownMenuTrigger
+              aria-label={t("cameraSettings.title", { camera })}
+            >
               <div
                 className={cn(
                   "flex flex-col items-center justify-center rounded-lg bg-secondary p-2 text-secondary-foreground md:p-0",
@@ -1414,11 +1394,6 @@ function FrigateCameraFeatures({
                         )}
                     </div>
                   )}
-                <LiveImageLevelsControl
-                  disabled={debug}
-                  levels={levels}
-                  onChange={setLevels}
-                />
                 {isRestreamed && (
                   <div className="flex flex-col gap-1">
                     <div className="flex items-center justify-between">
@@ -1776,13 +1751,6 @@ function FrigateCameraFeatures({
                     )}
                   </div>
                 )}
-              <div className="px-2">
-                <LiveImageLevelsControl
-                  disabled={debug}
-                  levels={levels}
-                  onChange={setLevels}
-                />
-              </div>
               <div className="flex flex-col gap-1 px-2">
                 <div className="mb-1 text-sm font-medium leading-none">
                   {t("manualRecording.title")}

@@ -2,14 +2,7 @@ import WebRtcPlayer from "./WebRTCPlayer";
 import { CameraConfig } from "@/types/frigateConfig";
 import AutoUpdatingCameraImage from "../camera/AutoUpdatingCameraImage";
 import ActivityIndicator from "../indicators/activity-indicator";
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useResizeObserver } from "@/hooks/resize-observer";
 import MSEPlayer from "./MsePlayer";
 import JSMpegPlayer from "./JSMpegPlayer";
@@ -18,7 +11,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useCameraActivity } from "@/hooks/use-camera-activity";
 import {
   LivePlayerError,
-  LiveImageLevels,
   LivePlayerMode,
   PlayerStatsType,
   VideoResolutionType,
@@ -36,13 +28,6 @@ import { useCameraFriendlyName } from "@/hooks/use-camera-friendly-name";
 import { ImageShadowOverlay } from "../overlay/ImageShadowOverlay";
 import { getTranslatedLabel } from "@/utils/i18n";
 import { formatList } from "@/utils/stringUtil";
-import { useUserPersistence } from "@/hooks/use-user-persistence";
-import LiveImageLevelsFilter from "./LiveImageLevelsFilter";
-import {
-  DEFAULT_LIVE_IMAGE_LEVELS,
-  isDefaultLiveImageLevels,
-  normalizeLiveImageLevels,
-} from "@/utils/liveImageLevels";
 
 type LivePlayerProps = {
   cameraRef?: (ref: HTMLDivElement | null) => void;
@@ -57,7 +42,6 @@ type LivePlayerProps = {
   windowVisible?: boolean;
   playAudio?: boolean;
   volume?: number;
-  levels?: LiveImageLevels;
   playInBackground: boolean;
   micEnabled?: boolean; // only webrtc supports mic
   iOSCompatFullScreen?: boolean;
@@ -83,7 +67,6 @@ export default function LivePlayer({
   windowVisible = true,
   playAudio = false,
   volume,
-  levels,
   playInBackground = false,
   micEnabled = false,
   iOSCompatFullScreen = false,
@@ -101,30 +84,6 @@ export default function LivePlayer({
   const overlayRef = useRef<HTMLDivElement | null>(null);
 
   const cameraName = useCameraFriendlyName(cameraConfig);
-  const [persistedLevels] = useUserPersistence<LiveImageLevels>(
-    `${cameraConfig.name}-live-levels`,
-    DEFAULT_LIVE_IMAGE_LEVELS,
-  );
-  const effectiveLevels = normalizeLiveImageLevels(levels ?? persistedLevels);
-  const levelsFilterInstanceId = useId().replaceAll(":", "");
-  const levelsFilterValueId = [
-    effectiveLevels.blackPoint,
-    effectiveLevels.shadowPoint,
-    effectiveLevels.midtonePoint,
-    effectiveLevels.highlightPoint,
-    effectiveLevels.whitePoint,
-  ].join("-");
-  const levelsFilterId = `live-levels-${levelsFilterInstanceId}-${levelsFilterValueId}`;
-  const mediaStyle = useMemo<React.CSSProperties>(
-    () =>
-      isDefaultLiveImageLevels(effectiveLevels)
-        ? {}
-        : {
-            filter: `url(#${levelsFilterId})`,
-            willChange: "filter",
-          },
-    [effectiveLevels, levelsFilterId],
-  );
 
   // player is showing on a dashboard if containerRef is not provided
 
@@ -308,7 +267,6 @@ export default function LivePlayer({
         setStats={setStats}
         audioEnabled={playAudio}
         volume={volume}
-        mediaStyle={mediaStyle}
         microphoneEnabled={micEnabled}
         iOSCompatFullScreen={iOSCompatFullScreen}
         onPlaying={playerIsPlaying}
@@ -326,7 +284,6 @@ export default function LivePlayer({
           playbackEnabled={cameraActive || liveReady}
           audioEnabled={playAudio}
           volume={volume}
-          mediaStyle={mediaStyle}
           playInBackground={playInBackground}
           getStats={showStats}
           setStats={setStats}
@@ -356,7 +313,6 @@ export default function LivePlayer({
             cameraActive || !showStillWithoutActivity || liveReady
           }
           useWebGL={useWebGL}
-          mediaStyle={mediaStyle}
           setStats={setStats}
           containerRef={containerRef ?? internalContainerRef}
           onPlaying={playerIsPlaying}
@@ -396,10 +352,6 @@ export default function LivePlayer({
         }
       }}
     >
-      <LiveImageLevelsFilter
-        filterId={levelsFilterId}
-        levels={effectiveLevels}
-      />
       {cameraEnabled &&
         ((showStillWithoutActivity && !liveReady) || liveReady) && (
           <ImageShadowOverlay
@@ -483,7 +435,6 @@ export default function LivePlayer({
           showFps={false}
           reloadInterval={stillReloadInterval}
           periodicCache
-          imageStyle={mediaStyle}
         />
       </div>
 
