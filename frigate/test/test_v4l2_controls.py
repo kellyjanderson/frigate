@@ -67,6 +67,7 @@ class FakeV4L2Adapter(V4L2Adapter):
         self._fd_nodes: dict[int, str] = {}
         self._next_fd = 100
         self._mutex = threading.Lock()
+        self.after_resolve: Callable[[_ResolvedV4L2Device], None] | None = None
         self.after_open: Callable[[], None] | None = None
 
     def add_identity(self, reference: str, **changes: object) -> None:
@@ -81,6 +82,8 @@ class FakeV4L2Adapter(V4L2Adapter):
         identity = self.identities.get(configured_reference)
         if identity is None:
             raise FileNotFoundError(errno.ENOENT, "secret missing path")
+        if self.after_resolve is not None:
+            self.after_resolve(identity)
         return identity
 
     def open_device(self, device_node: str) -> int:
@@ -388,6 +391,27 @@ class TestV4L2DeviceTransactions(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(self.reference, str(caught.exception))
         self.assertNotIn("1234", str(caught.exception))
 
+    async def test_close_disconnect_overrides_operation_io_failure(self) -> None:
+        state = None
+        self.adapter.failures["close"] = OSError(
+            errno.ENODEV, "removed while closing secret device path"
+        )
+
+        def failed_operation(_adapter, _fd, _resolved, device_state):
+            nonlocal state
+            state = device_state
+            device_state.cache_slots["descriptor"] = object()
+            raise OSError(errno.EACCES, "operation denied for secret device path")
+
+        with self.assertRaises(V4L2ControlError) as caught:
+            await self.executor.run(_camera(self.reference), failed_operation)
+
+        self.assertEqual("device_disconnected", caught.exception.category)
+        self.assertEqual({}, state.cache_slots)
+        self.assertEqual(1, state.generation)
+        self.assertEqual("close", self.adapter.trace[-1][0])
+        self.assertNotIn("secret device path", str(caught.exception))
+
     async def test_post_submission_cancellation_waits_for_close_and_invalidates(
         self,
     ) -> None:
@@ -450,24 +474,84 @@ class TestV4L2DeviceTransactions(unittest.IsolatedAsyncioTestCase):
         )
         registry = self.executor._registry
         reference_digest = original.configured_reference_digest
-        first = await registry.lease(reference_digest, replacement)
-        second = await registry.lease(reference_digest, replacement)
-        for state in first.states:
-            await state.lock.acquire()
-        try:
-            self.assertTrue(await registry.snapshot_is_current(first))
-            self.assertFalse(await registry.accept_or_reject(first, replacement))
-        finally:
-            for state in reversed(first.states):
-                state.lock.release()
+        self.adapter.identities[self.reference] = replacement
+        original_lease = registry.lease
+        original_snapshot = registry.snapshot_is_current
+        original_decision = registry.accept_or_reject
+        replacement_lease_count = 0
+        replacement_leases_ready = asyncio.Event()
+        first_decision_entered = asyncio.Event()
+        allow_first_decision = asyncio.Event()
+        waiter_holds_state = asyncio.Event()
+        allow_waiter_snapshot = asyncio.Event()
+        replacement_snapshot_count = 0
 
-        ordered_digests = [state.identity_digest for state in first.states]
-        self.assertEqual(sorted(ordered_digests), ordered_digests)
-        await registry.release(first)
-        self.assertIn(replacement.physical_key, registry._states)
-        await registry.release(second)
+        async def traced_lease(reference_digest, candidate):
+            nonlocal replacement_lease_count
+            lease = await original_lease(reference_digest, candidate)
+            if candidate.physical_key == replacement.physical_key:
+                replacement_lease_count += 1
+                if replacement_lease_count == 2:
+                    replacement_leases_ready.set()
+            return lease
+
+        async def gated_snapshot(lease):
+            nonlocal replacement_snapshot_count
+            if lease.candidate_key == replacement.physical_key:
+                replacement_snapshot_count += 1
+                if replacement_snapshot_count == 2:
+                    waiter_holds_state.set()
+                    await allow_waiter_snapshot.wait()
+            return await original_snapshot(lease)
+
+        async def gated_decision(lease, candidate):
+            if (
+                candidate.physical_key == replacement.physical_key
+                and not first_decision_entered.is_set()
+            ):
+                first_decision_entered.set()
+                await allow_first_decision.wait()
+            return await original_decision(lease, candidate)
+
+        registry.lease = traced_lease
+        registry.snapshot_is_current = gated_snapshot
+        registry.accept_or_reject = gated_decision
+        first = asyncio.create_task(
+            self.executor.run(
+                _camera(self.reference),
+                lambda *_: self.fail("first replacement operation executed"),
+            )
+        )
+        await asyncio.wait_for(first_decision_entered.wait(), 2)
+        rejected_state = registry._states[replacement.physical_key]
+        rejected_lock = rejected_state.lock
+        second = asyncio.create_task(
+            self.executor.run(
+                _camera(self.reference),
+                lambda *_: self.fail("waiting replacement operation executed"),
+            )
+        )
+        await asyncio.wait_for(replacement_leases_ready.wait(), 2)
+        self.assertEqual(2, rejected_state.leases)
+        allow_first_decision.set()
+        await asyncio.wait_for(waiter_holds_state.wait(), 2)
+
+        with self.assertRaises(V4L2ControlError):
+            await asyncio.wait_for(first, 2)
+        self.assertIs(rejected_state, registry._states[replacement.physical_key])
+        self.assertIs(rejected_lock, rejected_state.lock)
+        self.assertTrue(rejected_state.stale)
+        self.assertTrue(rejected_lock.locked())
+        self.assertEqual(1, rejected_state.leases)
+        self.assertEqual({}, rejected_state.cache_slots)
+
+        allow_waiter_snapshot.set()
+        with self.assertRaises(V4L2ControlError):
+            await asyncio.wait_for(second, 2)
         self.assertNotIn(replacement.physical_key, registry._states)
         self.assertIn(original.physical_key, registry._states)
+        binding = registry._bindings[reference_digest]
+        self.assertEqual(original.physical_key, binding.physical_key)
 
     async def test_binding_version_change_retries_with_both_states_locked(self) -> None:
         reference_digest = hashlib.sha256(self.reference.encode()).hexdigest()
@@ -481,29 +565,85 @@ class TestV4L2DeviceTransactions(unittest.IsolatedAsyncioTestCase):
             card="card-b",
         )
         registry = self.executor._registry
-        lease_a = await registry.lease(reference_digest, candidate_a)
-        stale_lease_b = await registry.lease(reference_digest, candidate_b)
+        candidate_b_state = registry._state_for(candidate_b.physical_key)
+        await candidate_b_state.lock.acquire()
+        original_lease = registry.lease
+        original_snapshot = registry.snapshot_is_current
+        replacement_leased = asyncio.Event()
+        leases = []
+        replacement_snapshots = []
 
-        for state in lease_a.states:
-            await state.lock.acquire()
-        try:
-            self.assertTrue(await registry.snapshot_is_current(lease_a))
-            self.assertTrue(await registry.accept_or_reject(lease_a, candidate_a))
-        finally:
-            for state in reversed(lease_a.states):
-                state.lock.release()
-            await registry.release(lease_a)
+        async def traced_lease(reference_digest, candidate):
+            lease = await original_lease(reference_digest, candidate)
+            leases.append(lease)
+            if candidate.physical_key == candidate_b.physical_key:
+                replacement_leased.set()
+            return lease
 
-        self.assertIsNone(await registry.accept_or_reject(stale_lease_b, candidate_b))
-        await registry.release(stale_lease_b)
+        async def traced_snapshot(lease):
+            locks_held = all(state.lock.locked() for state in lease.states)
+            result = await original_snapshot(lease)
+            if lease.candidate_key == candidate_b.physical_key:
+                replacement_snapshots.append((locks_held, result))
+            return result
 
-        retry = await registry.lease(reference_digest, candidate_b)
+        registry.lease = traced_lease
+        registry.snapshot_is_current = traced_snapshot
+        replacement_resolved = threading.Event()
+        allow_replacement_resolution = threading.Event()
+
+        def gate_replacement_resolution(identity):
+            if identity.physical_key == candidate_b.physical_key:
+                replacement_resolved.set()
+                allow_replacement_resolution.wait(3)
+
+        self.adapter.identities[self.reference] = candidate_b
+        self.adapter.after_resolve = gate_replacement_resolution
+        replacement_operation_executed = False
+
+        def replacement_operation(*_args):
+            nonlocal replacement_operation_executed
+            replacement_operation_executed = True
+            return "replacement"
+
+        replacement_task = asyncio.create_task(
+            self.executor.run(_camera(self.reference), replacement_operation)
+        )
+        self.assertTrue(await asyncio.to_thread(replacement_resolved.wait, 2))
+        self.adapter.identities[self.reference] = candidate_a
+        allow_replacement_resolution.set()
+        await asyncio.wait_for(replacement_leased.wait(), 2)
+
+        matching_result = await asyncio.wait_for(
+            self.executor.run(_camera(self.reference), lambda *_: "matching-a"),
+            2,
+        )
+        self.assertEqual("matching-a", matching_result)
+        candidate_b_state.lock.release()
+
+        with self.assertRaises(V4L2ControlError) as caught:
+            await asyncio.wait_for(replacement_task, 2)
+        self.assertEqual("unstable_device_identity", caught.exception.category)
+        self.assertFalse(replacement_operation_executed)
+        replacement_leases = [
+            lease for lease in leases if lease.candidate_key == candidate_b.physical_key
+        ]
+        self.assertEqual(2, len(replacement_leases))
+        self.assertEqual(1, len(replacement_leases[0].states))
+        retry = replacement_leases[1]
         self.assertEqual(2, len(retry.states))
         self.assertEqual(
             sorted(state.identity_digest for state in retry.states),
             [state.identity_digest for state in retry.states],
         )
-        await registry.release(retry)
+        self.assertEqual([(True, False), (True, True)], replacement_snapshots)
+        binding = registry._bindings[reference_digest]
+        self.assertEqual(candidate_a.physical_key, binding.physical_key)
+        self.assertNotIn(candidate_b.physical_key, registry._states)
+        self.assertEqual(
+            1,
+            sum(1 for event in self.adapter.trace if event[0] == "open"),
+        )
 
 
 if __name__ == "__main__":

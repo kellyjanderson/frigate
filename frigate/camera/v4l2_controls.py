@@ -40,6 +40,15 @@ class _IdentityChangedError(Exception):
     """Indicate that identity changed without exposing its raw components."""
 
 
+class _TransactionLifetimeError(Exception):
+    """Preserve operation and close failures from one device transaction."""
+
+    def __init__(self, operation_error: Exception, close_error: Exception) -> None:
+        self.operation_error = operation_error
+        self.close_error = close_error
+        super().__init__("V4L2 transaction operation and close both failed")
+
+
 @dataclass(frozen=True, slots=True)
 class _ResolvedV4L2Device:
     """A resolved device whose physical key excludes its transient node."""
@@ -529,9 +538,13 @@ class V4L2DeviceTransactionExecutor:
         finally:
             try:
                 self._adapter.close_device(fd)
-            except Exception:
+            except Exception as close_error:
                 if operation_error is None:
                     raise
+                raise _TransactionLifetimeError(
+                    operation_error,
+                    close_error,
+                ) from operation_error
 
     @staticmethod
     def _is_stable_reference(configured_reference: str) -> bool:
@@ -548,7 +561,17 @@ class V4L2DeviceTransactionExecutor:
     ) -> V4L2ControlError:
         if isinstance(error, V4L2ControlError):
             return error
-        if isinstance(error, _IdentityChangedError):
+        if isinstance(error, _TransactionLifetimeError):
+            transaction_errors = (error.operation_error, error.close_error)
+            if any(
+                isinstance(transaction_error, OSError)
+                and transaction_error.errno in _DISCONNECTED_ERRNOS
+                for transaction_error in transaction_errors
+            ):
+                category: V4L2ErrorCategory = "device_disconnected"
+            else:
+                category = "device_io"
+        elif isinstance(error, _IdentityChangedError):
             category: V4L2ErrorCategory = "unstable_device_identity"
         elif isinstance(error, OSError) and error.errno in _DISCONNECTED_ERRNOS:
             category = "device_disconnected"
