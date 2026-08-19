@@ -458,11 +458,11 @@ class V4L2Adapter:
         if descriptor.control_type in _SCALAR_CONTROL_TYPES:
             return control.value
         if descriptor.control_type == V4L2_CTRL_TYPE_STRING:
-            return (
-                ctypes.string_at(control.ptr, control.size)
-                .split(b"\0", 1)[0]
-                .decode("utf-8", errors="replace")
-            )
+            value = ctypes.string_at(control.ptr, control.size).split(b"\0", 1)[0]
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
         if descriptor.control_type == V4L2_CTRL_TYPE_U8:
             return ctypes.string_at(control.ptr, control.size)
         if descriptor.control_type == V4L2_CTRL_TYPE_U16:
@@ -479,7 +479,7 @@ class V4L2Adapter:
 
     @staticmethod
     def _decode_c_string(value: bytes) -> str:
-        return value.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+        return value.split(b"\0", 1)[0].decode("utf-8")
 
     @classmethod
     def _udev_properties(cls, device_node: str) -> dict[str, str]:
@@ -985,7 +985,10 @@ class V4L2ControlProvider:
                     )
                 )
             return tuple(
-                replace(descriptor, current_value=values.get(descriptor.id))
+                self._descriptor_with_current_value(
+                    descriptor,
+                    values.get(descriptor.id),
+                )
                 for descriptor in descriptors
             )
 
@@ -1200,6 +1203,17 @@ class V4L2ControlProvider:
                     and descriptor.control_type in _SCALAR_CONTROL_TYPES
                 )
             )
+        )
+
+    @staticmethod
+    def _descriptor_with_current_value(
+        descriptor: V4L2ControlDescriptor,
+        value: V4L2ControlValue,
+    ) -> V4L2ControlDescriptor:
+        return replace(
+            descriptor,
+            current_value=value,
+            read_supported=descriptor.read_supported and value is not None,
         )
 
     @staticmethod

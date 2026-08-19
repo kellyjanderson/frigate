@@ -21,12 +21,18 @@ from frigate.camera.v4l2_controls import (
     V4L2_CTRL_FLAG_NEXT_COMPOUND,
     V4L2_CTRL_FLAG_NEXT_CTRL,
     V4L2_CTRL_FLAG_READ_ONLY,
+    V4L2_CTRL_FLAG_WRITE_ONLY,
+    V4L2_CTRL_TYPE_BITMASK,
     V4L2_CTRL_TYPE_BOOLEAN,
+    V4L2_CTRL_TYPE_BUTTON,
     V4L2_CTRL_TYPE_INTEGER,
     V4L2_CTRL_TYPE_INTEGER64,
     V4L2_CTRL_TYPE_INTEGER_MENU,
     V4L2_CTRL_TYPE_MENU,
     V4L2_CTRL_TYPE_STRING,
+    V4L2_CTRL_TYPE_U8,
+    V4L2_CTRL_TYPE_U16,
+    V4L2_CTRL_TYPE_U32,
     V4L2Adapter,
     V4L2ControlError,
     V4L2ControlProvider,
@@ -126,6 +132,7 @@ class FakeV4L2Adapter(V4L2Adapter):
         self.menu_items: dict[tuple[int, int], _V4L2QueryMenuItem] = {}
         self.values: dict[int, object] = {}
         self.before_read: Callable[[], None] | None = None
+        self.before_close: Callable[[int], None] | None = None
 
     def add_identity(self, reference: str, **changes: object) -> None:
         digest = hashlib.sha256(reference.encode()).hexdigest()
@@ -170,6 +177,8 @@ class FakeV4L2Adapter(V4L2Adapter):
 
     def close_device(self, fd: int) -> None:
         self._record("close", fd)
+        if self.before_close is not None:
+            self.before_close(fd)
         with self._mutex:
             self._fd_nodes.pop(fd, None)
         self._fail("close")
@@ -209,10 +218,22 @@ class FakeV4L2Adapter(V4L2Adapter):
         control_class: int = 0,
     ):
         self._record("read", fd, control_class, tuple(item.id for item in controls))
+        self._fail(f"read:{control_class}")
         self._fail("read")
         if self.before_read is not None:
             self.before_read()
-        return {control.id: self.values[control.id] for control in controls}
+        values = {}
+        for control in controls:
+            value = self.values[control.id]
+            if control.control_type == V4L2_CTRL_TYPE_STRING and isinstance(
+                value, bytes
+            ):
+                try:
+                    value = value.decode("utf-8")
+                except UnicodeDecodeError:
+                    value = None
+            values[control.id] = value
+        return values
 
     def _record(self, *event: object) -> None:
         with self._mutex:
@@ -1075,6 +1096,297 @@ class TestV4L2ControlProvider(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(2**40, selected[descriptors[3].serialized_id])
         self.assertIs(selected[descriptors[4].serialized_id], True)
+
+    async def test_public_routes_cover_remaining_types_flags_and_invalid_utf8(
+        self,
+    ) -> None:
+        button = _control(
+            0x00980900,
+            control_type=V4L2_CTRL_TYPE_BUTTON,
+            name="Button",
+        )
+        bitmask = _control(
+            0x00980901,
+            control_type=V4L2_CTRL_TYPE_BITMASK,
+            name="Mask",
+        )
+        u8 = _control(
+            0x00980902,
+            control_type=V4L2_CTRL_TYPE_U8,
+            name="U8",
+            element_size=1,
+            element_count=3,
+        )
+        u16 = _control(
+            0x00980903,
+            control_type=V4L2_CTRL_TYPE_U16,
+            name="U16",
+            element_size=2,
+            element_count=2,
+        )
+        u32 = _control(
+            0x00980904,
+            control_type=V4L2_CTRL_TYPE_U32,
+            name="U32",
+            element_size=4,
+            element_count=2,
+        )
+        invalid_string = _control(
+            0x00980905,
+            control_type=V4L2_CTRL_TYPE_STRING,
+            name="String",
+            maximum=8,
+        )
+        all_flags = (
+            V4L2_CTRL_FLAG_DISABLED
+            | V4L2_CTRL_FLAG_GRABBED
+            | V4L2_CTRL_FLAG_READ_ONLY
+            | V4L2_CTRL_FLAG_INACTIVE
+            | V4L2_CTRL_FLAG_WRITE_ONLY
+            | V4L2_CTRL_FLAG_HAS_PAYLOAD
+        )
+        flagged = _control(
+            0x00980906,
+            control_type=V4L2_CTRL_TYPE_U8,
+            name="Flagged",
+            flags=all_flags,
+            element_size=1,
+            element_count=1,
+        )
+        self.adapter.controls = [
+            button,
+            bitmask,
+            u8,
+            u16,
+            u32,
+            invalid_string,
+            flagged,
+        ]
+        self.adapter.values = {
+            bitmask.id: 0xA5,
+            u8.id: b"\x01\x02\xff",
+            u16.id: (1, 65535),
+            u32.id: (1, 2**32 - 1),
+            invalid_string.id: b"valid-prefix\xff",
+        }
+
+        descriptors = await self.provider.get_controls(self.camera)
+
+        self.assertFalse(descriptors[0].read_supported)
+        self.assertIsNone(descriptors[0].current_value)
+        self.assertEqual(0xA5, descriptors[1].current_value)
+        self.assertEqual(b"\x01\x02\xff", descriptors[2].current_value)
+        self.assertEqual((1, 65535), descriptors[3].current_value)
+        self.assertEqual((1, 2**32 - 1), descriptors[4].current_value)
+        self.assertIsNone(descriptors[5].current_value)
+        self.assertFalse(descriptors[5].read_supported)
+        self.assertEqual(all_flags, descriptors[6].flags)
+        self.assertFalse(descriptors[6].active)
+        self.assertFalse(descriptors[6].writable)
+        self.assertFalse(descriptors[6].read_supported)
+        selected = await self.provider.get_control_values(
+            self.camera,
+            tuple(descriptor.serialized_id for descriptor in descriptors),
+        )
+        self.assertEqual(0xA5, selected[descriptors[1].serialized_id])
+        for descriptor in (
+            descriptors[0],
+            *descriptors[2:],
+        ):
+            self.assertIsNone(selected[descriptor.serialized_id])
+
+    def test_invalid_utf8_is_never_replaced_in_driver_text_or_string_values(
+        self,
+    ) -> None:
+        for driver_text in (b"control\xff", b"menu\xfe", b"driver\x80"):
+            with (
+                self.subTest(driver_text=driver_text),
+                self.assertRaises(UnicodeDecodeError),
+            ):
+                V4L2Adapter._decode_c_string(driver_text)
+
+        descriptor = V4L2ControlProvider._descriptor(
+            _control(
+                0x00980900,
+                control_type=V4L2_CTRL_TYPE_STRING,
+                maximum=4,
+            ),
+            (),
+        )
+        allocation = ctypes.create_string_buffer(b"a\xff\0", 4)
+        control = _ExtControlBuffer(
+            size=4,
+            ptr=ctypes.cast(allocation, ctypes.c_void_p),
+        )
+        self.assertIsNone(V4L2Adapter._decode_control_value(control, descriptor))
+
+    async def test_query_conversion_and_selected_read_fail_without_partial_results(
+        self,
+    ) -> None:
+        control = _control(0x00980900)
+        self.adapter.controls = [control]
+        self.adapter.values = {control.id: 12}
+
+        self.adapter.failures["query"] = OSError(errno.EACCES, "private query")
+        with self.assertRaises(V4L2ControlError) as query_failure:
+            await self.provider.get_controls(self.camera)
+        self.assertEqual("device_io", query_failure.exception.category)
+        self.adapter.failures.clear()
+
+        original_descriptor = self.provider._descriptor
+
+        def fail_conversion(*_args):
+            raise ValueError("private conversion payload")
+
+        self.provider._descriptor = fail_conversion
+        try:
+            with self.assertRaises(V4L2ControlError) as conversion_failure:
+                await self.provider.get_controls(self.camera)
+            self.assertEqual("device_io", conversion_failure.exception.category)
+        finally:
+            self.provider._descriptor = original_descriptor
+
+        await self.provider.get_controls(self.camera)
+        self.adapter.failures["read:0"] = OSError(
+            errno.EACCES,
+            "private selected value",
+        )
+        with self.assertRaises(V4L2ControlError) as read_failure:
+            await self.provider.get_control_values(
+                self.camera,
+                ("0x00980900",),
+            )
+        self.assertEqual("device_io", read_failure.exception.category)
+        self.assertEqual("close", self.adapter.trace[-1][0])
+
+    async def test_removal_during_discovery_and_selected_read_evicts_cache(
+        self,
+    ) -> None:
+        control = _control(0x00980900)
+        self.adapter.controls = [control]
+        self.adapter.values = {control.id: 12}
+        self.adapter.failures["query"] = OSError(errno.ENODEV, "removed")
+
+        with self.assertRaises(V4L2ControlError) as discovery_failure:
+            await self.provider.get_controls(self.camera)
+        self.assertEqual("device_disconnected", discovery_failure.exception.category)
+        self.adapter.failures.clear()
+        await self.provider.get_controls(self.camera)
+        query_count = self._event_count("query")
+
+        self.adapter.failures["read:0"] = OSError(errno.ENODEV, "removed")
+        with self.assertRaises(V4L2ControlError) as selected_failure:
+            await self.provider.get_control_values(
+                self.camera,
+                ("0x00980900",),
+            )
+        self.assertEqual("device_disconnected", selected_failure.exception.category)
+        self.adapter.failures.clear()
+
+        values = await self.provider.get_control_values(
+            self.camera,
+            ("0x00980900",),
+        )
+        self.assertEqual({"0x00980900": 12}, values)
+        self.assertGreater(self._event_count("query"), query_count)
+
+    async def test_identity_replacement_evicts_provider_descriptor_cache(self) -> None:
+        original_control = _control(0x00980900, name="Original")
+        self.adapter.controls = [original_control]
+        self.adapter.values = {original_control.id: 12}
+        await self.provider.get_controls(self.camera)
+        initial_queries = self._event_count("query")
+        original_identity = self.adapter.identities[self.reference]
+        self.adapter.identities[self.reference] = _identity(
+            self.reference,
+            original_identity.configured_reference_digest,
+            serial="replacement",
+            path="replacement",
+            bus="replacement",
+            card="replacement",
+        )
+
+        with self.assertRaises(V4L2ControlError) as replacement_failure:
+            await self.provider.get_controls(self.camera)
+        self.assertEqual(
+            "unstable_device_identity",
+            replacement_failure.exception.category,
+        )
+
+        replacement_control = _control(0x00980901, name="After reconnect")
+        self.adapter.identities[self.reference] = _identity(
+            self.reference,
+            original_identity.configured_reference_digest,
+            node="/dev/video55",
+        )
+        self.adapter.controls = [replacement_control]
+        self.adapter.values = {replacement_control.id: 34}
+        descriptors = await self.provider.get_controls(self.camera)
+
+        self.assertEqual([replacement_control.id], [item.id for item in descriptors])
+        self.assertGreater(self._event_count("query"), initial_queries)
+
+    async def test_provider_calls_serialize_overlap_and_close_before_unlock(
+        self,
+    ) -> None:
+        alias = "/dev/v4l/by-id/usb-camera-a-alias-video-index0"
+        other = "/dev/v4l/by-id/usb-camera-b-video-index0"
+        self.adapter.add_identity(alias, node="/dev/video22")
+        self.adapter.add_identity(
+            other,
+            serial="serial-b",
+            path="pci-b-usb-b",
+            node="/dev/video30",
+            bus="usb-b",
+            card="camera-b",
+        )
+        control = _control(0x00980900)
+        self.adapter.controls = [control]
+        self.adapter.values = {control.id: 12}
+        first_entered = threading.Event()
+        distinct_entered = threading.Event()
+        release_first = threading.Event()
+        read_count = 0
+        read_mutex = threading.Lock()
+
+        def gate_first_read() -> None:
+            nonlocal read_count
+            with read_mutex:
+                read_count += 1
+                current_count = read_count
+            if current_count == 1:
+                first_entered.set()
+                release_first.wait(3)
+            elif current_count == 2:
+                distinct_entered.set()
+
+        close_lock_states = []
+
+        def record_lock_state(fd: int) -> None:
+            node = self.adapter._fd_nodes[fd]
+            identity = next(
+                item
+                for item in self.adapter.identities.values()
+                if item.device_node == node
+            )
+            state = self.executor._registry._states[identity.physical_key]
+            close_lock_states.append(state.lock.locked())
+
+        self.adapter.before_read = gate_first_read
+        self.adapter.before_close = record_lock_state
+        first = asyncio.create_task(self.provider.get_controls(self.camera))
+        self.assertTrue(await asyncio.to_thread(first_entered.wait, 2))
+        same = asyncio.create_task(self.provider.get_controls(_camera(alias)))
+        distinct = asyncio.create_task(self.provider.get_controls(_camera(other)))
+
+        self.assertTrue(await asyncio.to_thread(distinct_entered.wait, 2))
+        self.assertEqual(2, read_count)
+        release_first.set()
+        await asyncio.gather(first, same, distinct)
+
+        self.assertEqual(3, read_count)
+        self.assertTrue(close_lock_states)
+        self.assertTrue(all(close_lock_states))
 
     async def test_menu_failure_is_categorized_and_cancellation_evicts_cache(
         self,
