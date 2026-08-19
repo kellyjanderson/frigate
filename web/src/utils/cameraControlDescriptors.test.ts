@@ -815,7 +815,7 @@ describe("camera control descriptor value policy", () => {
     });
   });
 
-  it("accepts inclusive aligned integer bounds and defaults invalid steps", () => {
+  it("accepts inclusive aligned integer bounds", () => {
     const descriptor = normalized({
       minimum: 10,
       maximum: 20,
@@ -823,10 +823,6 @@ describe("camera control descriptor value policy", () => {
       default_value: 10,
       current_value: 12,
     });
-    const defensiveDescriptor = {
-      ...descriptor,
-      step: 0,
-    } satisfies CameraControlDescriptor;
 
     expect(validateDescriptorValue(descriptor, 10)).toEqual({
       ok: true,
@@ -836,7 +832,25 @@ describe("camera control descriptor value policy", () => {
       ok: true,
       value: 20,
     });
-    expect(validateDescriptorValue(defensiveDescriptor, 11)).toEqual({
+  });
+
+  it.each([
+    ["missing", null],
+    ["zero", 0],
+    ["negative", -2],
+  ])("defaults a %s integer step to one", (_name, step) => {
+    const descriptor = {
+      ...normalized({
+        minimum: 10,
+        maximum: 20,
+        step: 2,
+        default_value: 10,
+        current_value: 12,
+      }),
+      step,
+    } satisfies CameraControlDescriptor;
+
+    expect(validateDescriptorValue(descriptor, 11)).toEqual({
       ok: true,
       value: 11,
     });
@@ -935,6 +949,24 @@ describe("camera control descriptor value policy", () => {
     });
   });
 
+  it.each([Number.MAX_SAFE_INTEGER, String(Number.MAX_SAFE_INTEGER)])(
+    "accepts the safe-integer-limit bitmask %j",
+    (candidate) => {
+      const descriptor = normalized({
+        control_type: 8,
+        minimum: 0,
+        maximum: Number.MAX_SAFE_INTEGER,
+        default_value: 1,
+        current_value: 5,
+      });
+
+      expect(validateDescriptorValue(descriptor, candidate)).toEqual({
+        ok: true,
+        value: Number.MAX_SAFE_INTEGER,
+      });
+    },
+  );
+
   it.each([
     ["wrong type", {}, "invalid_type"],
     ["negative number", -1, "invalid_bitmask"],
@@ -943,6 +975,7 @@ describe("camera control descriptor value policy", () => {
     ["whitespace", " 1", "invalid_bitmask"],
     ["fraction", "1.5", "invalid_bitmask"],
     ["exponent", "1e2", "invalid_bitmask"],
+    ["separator", "1_0", "invalid_bitmask"],
     ["empty hex", "0x", "invalid_bitmask"],
     ["trailing text", "0x1z", "invalid_bitmask"],
     ["unsafe number", Number.MAX_SAFE_INTEGER + 1, "unsafe_integer"],
@@ -963,31 +996,41 @@ describe("camera control descriptor value policy", () => {
     });
   });
 
-  it("preserves unknown bits when a caller changes one labeled bit", () => {
-    const descriptor = normalized({
-      control_type: 8,
-      minimum: 0,
-      maximum: 255,
-      default_value: 1,
-      current_value: 0b10000101,
-      menu_items: [
-        { index: 0, value: 1, label: "First" },
-        { index: 2, value: 4, label: "Third" },
-      ],
-    });
-    const authoritative = descriptor.current_value as number;
-    const clearedThird = authoritative & ~0b100;
-    const setThird = clearedThird | 0b100;
+  it.each([
+    ["first", 0b001],
+    ["third", 0b100],
+  ])(
+    "preserves unknown bits across clear/set transitions for the %s mask",
+    (_name, selectedMask) => {
+      const descriptor = normalized({
+        control_type: 8,
+        minimum: 0,
+        maximum: 255,
+        default_value: 1,
+        current_value: 0b10000101,
+        menu_items: [
+          { index: 0, value: 1, label: "First" },
+          { index: 2, value: 4, label: "Third" },
+        ],
+      });
+      const authoritative = descriptor.current_value as number;
+      const knownMasks = 0b001 | 0b100;
+      const unknownSetBits = authoritative & ~knownMasks;
+      const cleared = authoritative & ~selectedMask;
+      const set = cleared | selectedMask;
 
-    expect(validateDescriptorValue(descriptor, clearedThird)).toEqual({
-      ok: true,
-      value: 0b10000001,
-    });
-    expect(validateDescriptorValue(descriptor, setThird)).toEqual({
-      ok: true,
-      value: authoritative,
-    });
-  });
+      expect(cleared & ~knownMasks).toBe(unknownSetBits);
+      expect(validateDescriptorValue(descriptor, cleared)).toEqual({
+        ok: true,
+        value: cleared,
+      });
+      expect(set & ~knownMasks).toBe(unknownSetBits);
+      expect(validateDescriptorValue(descriptor, set)).toEqual({
+        ok: true,
+        value: authoritative,
+      });
+    },
+  );
 
   it("emits one synchronous canonical commit intent only after validation", () => {
     const descriptor = normalized({ step: 2, current_value: 128 });
