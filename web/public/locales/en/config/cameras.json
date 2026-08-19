@@ -871,6 +871,10 @@
     "label": "Camera URL",
     "description": "URL to visit the camera directly from system page"
   },
+  "v4l2_device": {
+    "label": "V4L2 device",
+    "description": "Stable Linux V4L2 device reference used for camera controls"
+  },
   "profiles": {
     "label": "Profiles",
     "description": "Named config profiles with partial overrides that can be activated at runtime."
