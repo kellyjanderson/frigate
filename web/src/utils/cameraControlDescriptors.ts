@@ -230,6 +230,24 @@ function numericValueIsValid(
   );
 }
 
+function elementShapeIsValid(
+  controlType: number,
+  maximum: number | null,
+  elementSize: number,
+  elementCount: number,
+  dimensions: number[],
+) {
+  if (elementCount !== 1 || dimensions.length !== 0) {
+    return false;
+  }
+
+  if (controlType === CONTROL_TYPE.string) {
+    return maximum !== null && elementSize === maximum + 1;
+  }
+
+  return elementSize === 4;
+}
+
 function typeSpecificShapeIsValid(
   descriptor: Omit<CameraControlDescriptor, "structurally_supported" | "state">,
 ) {
@@ -366,8 +384,13 @@ export function normalizeCameraControlDescriptor(
     return unsupported(input, "payload_not_supported");
   }
   if (
-    input.dimensions.length !== 0 ||
-    (input.control_type !== CONTROL_TYPE.string && input.element_count > 1)
+    !elementShapeIsValid(
+      input.control_type,
+      input.maximum,
+      input.element_size,
+      input.element_count,
+      input.dimensions,
+    )
   ) {
     return unsupported(input, "unsupported_element_shape");
   }

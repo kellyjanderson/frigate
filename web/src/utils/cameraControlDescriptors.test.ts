@@ -29,6 +29,14 @@ function integerDescriptor(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const requiredFields = Object.keys(integerDescriptor());
+
+function withoutField(field: string) {
+  const descriptor = integerDescriptor();
+  delete descriptor[field as keyof typeof descriptor];
+  return descriptor;
+}
+
 function requireDescriptor(result: DescriptorNormalizationResult) {
   expect(result.ok).toBe(true);
   if (!result.ok) {
@@ -105,8 +113,8 @@ describe("camera control descriptor normalization", () => {
         default_value: "",
         current_value: "camera",
         flags: 0x0100,
-        element_size: 1,
-        element_count: 64,
+        element_size: 64,
+        element_count: 1,
       }),
     ],
     [
@@ -191,8 +199,8 @@ describe("camera control descriptor normalization", () => {
           default_value: "",
           current_value: "camera",
           flags: 0x07ff,
-          element_size: 1,
-          element_count: 64,
+          element_size: 64,
+          element_count: 1,
         }),
       ),
     );
@@ -270,6 +278,279 @@ describe("camera control descriptor normalization", () => {
     expect(
       normalizeCameraControlDescriptor(
         integerDescriptor({ read_supported: true, current_value: null }),
+      ),
+    ).toMatchObject({ ok: false, reason: "invalid_scalar_value" });
+  });
+
+  it.each(requiredFields)("rejects a missing required %s field", (field) => {
+    expect(normalizeCameraControlDescriptor(withoutField(field)).ok).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    ["id", "0x00980900"],
+    ["serialized_id", 0x00980900],
+    ["name", 7],
+    ["control_class", "0x00980000"],
+    ["control_type", "integer"],
+    ["minimum", "0"],
+    ["maximum", "255"],
+    ["step", "1"],
+    ["default_value", {}],
+    ["current_value", []],
+    ["menu_items", {}],
+    ["flags", "0"],
+    ["element_size", "4"],
+    ["element_count", "1"],
+    ["dimensions", {}],
+    ["active", 1],
+    ["writable", 1],
+    ["read_supported", 1],
+  ])("rejects a malformed %s field type", (field, value) => {
+    expect(
+      normalizeCameraControlDescriptor(integerDescriptor({ [field]: value }))
+        .ok,
+    ).toBe(false);
+  });
+
+  it("rejects a canonical serialized ID that does not match the numeric ID", () => {
+    expect(
+      normalizeCameraControlDescriptor(
+        integerDescriptor({ serialized_id: "0x00980901" }),
+      ),
+    ).toMatchObject({ ok: false, reason: "invalid_serialized_id" });
+  });
+
+  it.each([
+    ["non-array menu", {}],
+    ["non-object item", ["Auto"]],
+    ["unknown item field", [{ index: 0, value: null, label: "Auto", raw: 1 }]],
+    ["missing index", [{ value: null, label: "Auto" }]],
+    ["missing value", [{ index: 0, label: "Auto" }]],
+    ["missing label", [{ index: 0, value: null }]],
+    ["negative index", [{ index: -1, value: null, label: "Auto" }]],
+    ["fractional index", [{ index: 0.5, value: null, label: "Auto" }]],
+    ["unsafe index", [{ index: 2 ** 53, value: null, label: "Auto" }]],
+    ["unsafe value", [{ index: 0, value: 2 ** 53, label: "Auto" }]],
+    ["non-string label", [{ index: 0, value: null, label: 7 }]],
+    ["ordinary menu value", [{ index: 0, value: 10, label: "Auto" }]],
+  ])("rejects malformed ordinary menu items: %s", (_name, menuItems) => {
+    expect(
+      normalizeCameraControlDescriptor(
+        integerDescriptor({
+          control_type: 3,
+          minimum: 0,
+          maximum: 0,
+          default_value: 0,
+          current_value: 0,
+          menu_items: menuItems,
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: "invalid_menu_items" });
+  });
+
+  it("rejects duplicate menu indexes", () => {
+    expect(
+      normalizeCameraControlDescriptor(
+        integerDescriptor({
+          control_type: 3,
+          minimum: 0,
+          maximum: 1,
+          default_value: 0,
+          current_value: 1,
+          menu_items: [
+            { index: 0, value: null, label: "Auto" },
+            { index: 0, value: null, label: "Manual" },
+          ],
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: "invalid_menu_items" });
+  });
+
+  it.each([
+    ["null value", null],
+    ["fractional value", 50.5],
+    ["unsafe value", 2 ** 53],
+  ])("rejects integer-menu items with an invalid %s", (_name, value) => {
+    expect(
+      normalizeCameraControlDescriptor(
+        integerDescriptor({
+          control_type: 9,
+          minimum: 0,
+          maximum: 0,
+          default_value: 0,
+          current_value: 0,
+          menu_items: [{ index: 0, value, label: "Frequency" }],
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: "invalid_menu_items" });
+  });
+
+  it.each([
+    ["boolean default", { control_type: 2, default_value: 0 }],
+    ["boolean current", { control_type: 2, current_value: 0 }],
+    ["integer default", { default_value: false }],
+    ["integer current", { current_value: false }],
+    ["menu default", { control_type: 3, default_value: "0" }],
+    ["menu current", { control_type: 3, current_value: "0" }],
+    ["button default", { control_type: 4, default_value: 0 }],
+    ["button current", { control_type: 4, current_value: 0 }],
+    [
+      "string default",
+      {
+        control_type: 7,
+        minimum: 0,
+        maximum: 63,
+        default_value: 0,
+        current_value: "camera",
+        element_size: 64,
+      },
+    ],
+    [
+      "string current",
+      {
+        control_type: 7,
+        minimum: 0,
+        maximum: 63,
+        default_value: "",
+        current_value: 0,
+        element_size: 64,
+      },
+    ],
+    ["bitmask default", { control_type: 8, default_value: false }],
+    ["bitmask current", { control_type: 8, current_value: false }],
+    ["integer-menu default", { control_type: 9, default_value: null }],
+    ["integer-menu current", { control_type: 9, current_value: null }],
+  ])("rejects a scalar/type contradiction: %s", (_name, overrides) => {
+    expect(
+      normalizeCameraControlDescriptor(integerDescriptor(overrides)),
+    ).toMatchObject({ ok: false, reason: "invalid_scalar_value" });
+  });
+
+  it.each([
+    ["integer", {}],
+    ["boolean", { control_type: 2, default_value: true, current_value: false }],
+    [
+      "menu",
+      {
+        control_type: 3,
+        minimum: 0,
+        maximum: 0,
+        default_value: 0,
+        current_value: 0,
+        menu_items: [{ index: 0, value: null, label: "Auto" }],
+      },
+    ],
+    [
+      "button",
+      {
+        control_type: 4,
+        minimum: null,
+        maximum: null,
+        step: null,
+        default_value: null,
+        current_value: null,
+      },
+    ],
+    ["bitmask", { control_type: 8, default_value: 1, current_value: 5 }],
+    [
+      "integer-menu",
+      {
+        control_type: 9,
+        minimum: 0,
+        maximum: 0,
+        default_value: 0,
+        current_value: 0,
+        menu_items: [{ index: 0, value: 50, label: "50 Hz" }],
+      },
+    ],
+  ])("rejects zero element metadata for %s", (_name, overrides) => {
+    expect(
+      normalizeCameraControlDescriptor(
+        integerDescriptor({ ...overrides, element_size: 0 }),
+      ),
+    ).toMatchObject({ ok: false, reason: "unsupported_element_shape" });
+    expect(
+      normalizeCameraControlDescriptor(
+        integerDescriptor({ ...overrides, element_count: 0 }),
+      ),
+    ).toMatchObject({ ok: false, reason: "unsupported_element_shape" });
+  });
+
+  it.each([
+    ["zero element size", { element_size: 0 }],
+    ["zero element count", { element_count: 0 }],
+    ["multiple scalar elements", { element_count: 2 }],
+    ["unexpected scalar element size", { element_size: 8 }],
+    ["zero dimension", { dimensions: [0] }],
+    ["positive dimension", { dimensions: [1] }],
+  ])("rejects invalid scalar element metadata: %s", (_name, overrides) => {
+    expect(
+      normalizeCameraControlDescriptor(integerDescriptor(overrides)),
+    ).toMatchObject({ ok: false, reason: "unsupported_element_shape" });
+  });
+
+  it.each([
+    ["zero element size", { element_size: 0 }],
+    ["zero element count", { element_count: 0 }],
+    ["multiple string elements", { element_count: 64 }],
+    ["size unequal to maximum plus one", { element_size: 63 }],
+    ["dimensioned string", { dimensions: [64] }],
+  ])("rejects invalid string element metadata: %s", (_name, overrides) => {
+    expect(
+      normalizeCameraControlDescriptor(
+        integerDescriptor({
+          control_type: 7,
+          name: "Label",
+          minimum: 0,
+          maximum: 63,
+          step: 1,
+          default_value: "",
+          current_value: "camera",
+          flags: 0x0100,
+          element_size: 64,
+          element_count: 1,
+          ...overrides,
+        }),
+      ),
+    ).toMatchObject({ ok: false, reason: "unsupported_element_shape" });
+  });
+
+  it.each([
+    ["reversed range", { minimum: 10, maximum: 1 }],
+    ["zero step", { step: 0 }],
+    ["negative step", { step: -1 }],
+    ["default below range", { default_value: -1 }],
+    ["default above range", { default_value: 256 }],
+    ["current below range", { current_value: -1 }],
+    ["current above range", { current_value: 256 }],
+    ["default off step", { step: 2, default_value: 127 }],
+    ["current off step", { step: 2, current_value: 129 }],
+  ])(
+    "rejects integer range/default/current contradiction: %s",
+    (_name, overrides) => {
+      expect(
+        normalizeCameraControlDescriptor(integerDescriptor(overrides)),
+      ).toMatchObject({ ok: false, reason: "invalid_scalar_value" });
+    },
+  );
+
+  it.each([
+    ["default absent from menu", { default_value: 1 }],
+    ["current absent from menu", { current_value: 1 }],
+  ])("rejects menu selection contradiction: %s", (_name, overrides) => {
+    expect(
+      normalizeCameraControlDescriptor(
+        integerDescriptor({
+          control_type: 3,
+          minimum: 0,
+          maximum: 1,
+          default_value: 0,
+          current_value: 0,
+          menu_items: [{ index: 0, value: null, label: "Auto" }],
+          ...overrides,
+        }),
       ),
     ).toMatchObject({ ok: false, reason: "invalid_scalar_value" });
   });
