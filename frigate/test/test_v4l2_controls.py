@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import errno
 import hashlib
 import threading
@@ -10,10 +11,33 @@ import unittest
 from collections.abc import Callable
 
 from frigate.camera.v4l2_controls import (
+    _VIDIOC_G_EXT_CTRLS,
+    _VIDIOC_QUERY_EXT_CTRL,
+    _VIDIOC_QUERYMENU,
+    V4L2_CTRL_FLAG_DISABLED,
+    V4L2_CTRL_FLAG_GRABBED,
+    V4L2_CTRL_FLAG_HAS_PAYLOAD,
+    V4L2_CTRL_FLAG_INACTIVE,
+    V4L2_CTRL_FLAG_NEXT_COMPOUND,
+    V4L2_CTRL_FLAG_NEXT_CTRL,
+    V4L2_CTRL_FLAG_READ_ONLY,
+    V4L2_CTRL_TYPE_BOOLEAN,
+    V4L2_CTRL_TYPE_INTEGER,
+    V4L2_CTRL_TYPE_INTEGER64,
+    V4L2_CTRL_TYPE_INTEGER_MENU,
+    V4L2_CTRL_TYPE_MENU,
+    V4L2_CTRL_TYPE_STRING,
     V4L2Adapter,
     V4L2ControlError,
+    V4L2ControlProvider,
     V4L2DeviceTransactionExecutor,
+    _ExtControlBuffer,
+    _ExtControlsBuffer,
+    _QueryExtControlBuffer,
+    _QueryMenuBuffer,
     _ResolvedV4L2Device,
+    _V4L2QueryControl,
+    _V4L2QueryMenuItem,
 )
 from frigate.config.camera import CameraConfig
 
@@ -56,6 +80,35 @@ def _identity(
     )
 
 
+def _control(
+    control_id: int,
+    *,
+    control_type: int = V4L2_CTRL_TYPE_INTEGER,
+    name: str = "Control",
+    minimum: int = 0,
+    maximum: int = 100,
+    step: int = 1,
+    default: int = 50,
+    flags: int = 0,
+    element_size: int = 4,
+    element_count: int = 1,
+    dimensions: tuple[int, ...] = (),
+) -> _V4L2QueryControl:
+    return _V4L2QueryControl(
+        id=control_id,
+        control_type=control_type,
+        name=name,
+        minimum=minimum,
+        maximum=maximum,
+        step=step,
+        default_value=default,
+        flags=flags,
+        element_size=element_size,
+        element_count=element_count,
+        dimensions=dimensions,
+    )
+
+
 class FakeV4L2Adapter(V4L2Adapter):
     """Deterministic adapter with traceable identity and lifetime behavior."""
 
@@ -69,6 +122,10 @@ class FakeV4L2Adapter(V4L2Adapter):
         self._mutex = threading.Lock()
         self.after_resolve: Callable[[_ResolvedV4L2Device], None] | None = None
         self.after_open: Callable[[], None] | None = None
+        self.controls: list[_V4L2QueryControl] = []
+        self.menu_items: dict[tuple[int, int], _V4L2QueryMenuItem] = {}
+        self.values: dict[int, object] = {}
+        self.before_read: Callable[[], None] | None = None
 
     def add_identity(self, reference: str, **changes: object) -> None:
         digest = hashlib.sha256(reference.encode()).hexdigest()
@@ -116,6 +173,46 @@ class FakeV4L2Adapter(V4L2Adapter):
         with self._mutex:
             self._fd_nodes.pop(fd, None)
         self._fail("close")
+
+    def query_control(self, fd: int, control_id: int) -> _V4L2QueryControl:
+        self._record("query", fd, control_id)
+        self._fail("query")
+        required_flags = V4L2_CTRL_FLAG_NEXT_CTRL | V4L2_CTRL_FLAG_NEXT_COMPOUND
+        if control_id & required_flags != required_flags:
+            raise AssertionError("control enumeration omitted required next flags")
+        numeric_id = control_id & ~required_flags
+        for control in self.controls:
+            if control.id > numeric_id:
+                return control
+        raise OSError(errno.EINVAL, "terminal query")
+
+    def query_menu(
+        self,
+        fd: int,
+        control_id: int,
+        index: int,
+        *,
+        integer_menu: bool,
+    ) -> _V4L2QueryMenuItem:
+        self._record("menu", fd, control_id, index, integer_menu)
+        self._fail(f"menu:{index}")
+        try:
+            return self.menu_items[(control_id, index)]
+        except KeyError as error:
+            raise OSError(errno.EINVAL, "sparse menu hole") from error
+
+    def get_control_values(
+        self,
+        fd: int,
+        controls,
+        *,
+        control_class: int = 0,
+    ):
+        self._record("read", fd, control_class, tuple(item.id for item in controls))
+        self._fail("read")
+        if self.before_read is not None:
+            self.before_read()
+        return {control.id: self.values[control.id] for control in controls}
 
     def _record(self, *event: object) -> None:
         with self._mutex:
@@ -727,6 +824,304 @@ class TestV4L2DeviceTransactions(unittest.IsolatedAsyncioTestCase):
             1,
             sum(1 for event in self.adapter.trace if event[0] == "open"),
         )
+
+
+class TestV4L2ControlProvider(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.reference = "/dev/v4l/by-id/usb-camera-a-video-index0"
+        self.adapter = FakeV4L2Adapter()
+        self.adapter.add_identity(self.reference)
+        self.executor = V4L2DeviceTransactionExecutor(self.adapter)
+        self.provider = V4L2ControlProvider(self.executor)
+        self.camera = _camera(self.reference)
+
+    def test_linux_control_ioctl_layouts_match_uapi(self) -> None:
+        self.assertEqual(232, ctypes.sizeof(_QueryExtControlBuffer))
+        self.assertEqual(44, ctypes.sizeof(_QueryMenuBuffer))
+        self.assertEqual(20, ctypes.sizeof(_ExtControlBuffer))
+        self.assertEqual(32, ctypes.sizeof(_ExtControlsBuffer))
+        self.assertEqual(0xC0E85667, _VIDIOC_QUERY_EXT_CTRL)
+        self.assertEqual(0xC02C5625, _VIDIOC_QUERYMENU)
+        self.assertEqual(0xC0205647, _VIDIOC_G_EXT_CTRLS)
+
+    async def test_public_routes_discover_sparse_menus_group_and_refresh(self) -> None:
+        brightness = _control(0x00980900, name="Brightness", default=40)
+        mode = _control(
+            0x00980901,
+            control_type=V4L2_CTRL_TYPE_MENU,
+            name="Mode",
+            minimum=0,
+            maximum=2,
+        )
+        power_line = _control(
+            0x009A0901,
+            control_type=V4L2_CTRL_TYPE_INTEGER_MENU,
+            name="Power Line",
+            minimum=1,
+            maximum=3,
+            flags=V4L2_CTRL_FLAG_GRABBED,
+            dimensions=(1,),
+        )
+        disabled = _control(
+            0x009A0902,
+            name="Disabled",
+            flags=(
+                V4L2_CTRL_FLAG_DISABLED
+                | V4L2_CTRL_FLAG_INACTIVE
+                | V4L2_CTRL_FLAG_READ_ONLY
+            ),
+        )
+        self.adapter.controls = [brightness, mode, power_line, disabled]
+        self.adapter.menu_items = {
+            (mode.id, 0): _V4L2QueryMenuItem(0, None, "Auto"),
+            (mode.id, 2): _V4L2QueryMenuItem(2, None, "Manual"),
+            (power_line.id, 1): _V4L2QueryMenuItem(1, 50, "50"),
+            (power_line.id, 3): _V4L2QueryMenuItem(3, 60, "60"),
+        }
+        self.adapter.values = {
+            brightness.id: 48,
+            mode.id: 2,
+            power_line.id: (50,),
+            disabled.id: 10,
+        }
+
+        descriptors = await self.provider.get_controls(self.camera)
+
+        self.assertEqual(
+            [brightness.id, mode.id, power_line.id, disabled.id],
+            [descriptor.id for descriptor in descriptors],
+        )
+        self.assertEqual("0x00980900", descriptors[0].serialized_id)
+        self.assertEqual(48, descriptors[0].current_value)
+        self.assertEqual(
+            ((0, None, "Auto"), (2, None, "Manual")),
+            tuple(
+                (item.index, item.value, item.label)
+                for item in descriptors[1].menu_items
+            ),
+        )
+        self.assertEqual(
+            ((1, 50, "50"), (3, 60, "60")),
+            tuple(
+                (item.index, item.value, item.label)
+                for item in descriptors[2].menu_items
+            ),
+        )
+        self.assertTrue(descriptors[2].read_supported)
+        self.assertEqual((50,), descriptors[2].current_value)
+        self.assertTrue(descriptors[2].active)
+        self.assertFalse(descriptors[2].writable)
+        self.assertFalse(descriptors[3].active)
+        self.assertFalse(descriptors[3].writable)
+        self.assertNotIn(threading.get_ident(), self.adapter.thread_ids)
+        reads = [event for event in self.adapter.trace if event[0] == "read"]
+        self.assertEqual(
+            [
+                (0x00980000, (brightness.id, mode.id)),
+                (0x009A0000, (power_line.id, disabled.id)),
+            ],
+            [(event[2], event[3]) for event in reads],
+        )
+        initial_query_count = self._event_count("query")
+
+        self.adapter.values[brightness.id] = 63
+        cached = await self.provider.get_controls(self.camera)
+        self.assertEqual(63, cached[0].current_value)
+        self.assertEqual(initial_query_count, self._event_count("query"))
+
+        await self.provider.get_controls(self.camera, refresh=True)
+        self.assertEqual(initial_query_count * 2, self._event_count("query"))
+
+    async def test_selected_reads_preserve_order_and_validate_bounds(self) -> None:
+        self.adapter.controls = [
+            _control(0x00980000 + index, name=f"Control {index}")
+            for index in range(1, 65)
+        ]
+        self.adapter.values = {
+            control.id: control.id for control in self.adapter.controls
+        }
+        await self.provider.get_controls(self.camera)
+        self.adapter.trace.clear()
+        ids = tuple(
+            f"0x{control.id:08x}" for control in reversed(self.adapter.controls)
+        )
+
+        values = await self.provider.get_control_values(self.camera, ids)
+
+        self.assertEqual(ids, tuple(values))
+        self.assertEqual(self.adapter.controls[-1].id, values[ids[0]])
+        reads = [event for event in self.adapter.trace if event[0] == "read"]
+        self.assertEqual(1, len(reads))
+        self.assertEqual(
+            tuple(reversed([item.id for item in self.adapter.controls])), reads[0][3]
+        )
+        self.assertEqual(0, reads[0][2])
+
+        self.adapter.trace.clear()
+        one_value = await self.provider.get_control_values(self.camera, (ids[0],))
+        self.assertEqual({ids[0]: self.adapter.controls[-1].id}, one_value)
+        self.assertEqual(1, self._event_count("read"))
+
+        invalid_collections = (
+            (),
+            (ids[0], ids[0]),
+            ("0X00980001",),
+            ("0x0098000A",),
+            tuple(f"0x{index:08x}" for index in range(65)),
+        )
+        for invalid in invalid_collections:
+            with self.subTest(invalid=invalid[:2]):
+                trace_length = len(self.adapter.trace)
+                with self.assertRaises(V4L2ControlError) as caught:
+                    await self.provider.get_control_values(self.camera, invalid)
+                self.assertEqual("invalid_control_ids", caught.exception.category)
+                self.assertEqual(trace_length, len(self.adapter.trace))
+
+    async def test_absent_id_and_read_failure_return_no_partial_mapping(self) -> None:
+        control = _control(0x00980900)
+        self.adapter.controls = [control]
+        self.adapter.values = {control.id: 12}
+
+        with self.assertRaises(V4L2ControlError) as missing:
+            await self.provider.get_control_values(self.camera, ("0x00980901",))
+        self.assertEqual("control_not_found", missing.exception.category)
+        self.assertEqual(0, self._event_count("read"))
+
+        self.adapter.failures["read"] = OSError(
+            errno.EACCES,
+            f"raw errno string value and {self.reference}",
+        )
+        with self.assertRaises(V4L2ControlError) as failed:
+            await self.provider.get_controls(self.camera)
+        self.assertEqual("device_io", failed.exception.category)
+        self.assertNotIn(self.reference, str(failed.exception))
+        self.assertNotIn("raw errno", str(failed.exception))
+
+    async def test_disconnect_and_matching_reconnect_force_rediscovery(self) -> None:
+        control = _control(0x00980900)
+        self.adapter.controls = [control]
+        self.adapter.values = {control.id: 12}
+        await self.provider.get_controls(self.camera)
+        query_count = self._event_count("query")
+        matching_identity = self.adapter.identities.pop(self.reference)
+
+        with self.assertRaises(V4L2ControlError) as disconnected:
+            await self.provider.get_controls(self.camera)
+        self.assertEqual("device_disconnected", disconnected.exception.category)
+        self.adapter.identities[self.reference] = matching_identity
+
+        descriptors = await self.provider.get_controls(self.camera)
+
+        self.assertEqual(12, descriptors[0].current_value)
+        self.assertGreater(self._event_count("query"), query_count)
+
+    async def test_lossless_payload_and_unknown_controls_remain_inspectable(
+        self,
+    ) -> None:
+        payload = _control(
+            0x00980900,
+            control_type=0x0200,
+            name="Payload",
+            flags=V4L2_CTRL_FLAG_HAS_PAYLOAD,
+            element_size=1,
+            element_count=4,
+            dimensions=(4,),
+        )
+        unknown = _control(
+            0x00980901,
+            control_type=0x0201,
+            name="Unknown",
+            element_size=0,
+            element_count=0,
+        )
+        string = _control(
+            0x00980902,
+            control_type=V4L2_CTRL_TYPE_STRING,
+            name="Label",
+            maximum=16,
+        )
+        integer64 = _control(
+            0x00980903,
+            control_type=V4L2_CTRL_TYPE_INTEGER64,
+            name="Large",
+        )
+        boolean = _control(
+            0x00980904,
+            control_type=V4L2_CTRL_TYPE_BOOLEAN,
+            name="Enabled",
+        )
+        self.adapter.controls = [payload, unknown, string, integer64, boolean]
+        self.adapter.values = {
+            payload.id: b"\x01\x02\x03\x04",
+            string.id: "private current label",
+            integer64.id: 2**40,
+            boolean.id: True,
+        }
+
+        descriptors = await self.provider.get_controls(self.camera)
+
+        self.assertTrue(descriptors[0].read_supported)
+        self.assertEqual(b"\x01\x02\x03\x04", descriptors[0].current_value)
+        self.assertFalse(descriptors[1].read_supported)
+        self.assertIsNone(descriptors[1].current_value)
+        selected = await self.provider.get_control_values(
+            self.camera,
+            tuple(descriptor.serialized_id for descriptor in descriptors),
+        )
+        self.assertIsNone(selected[descriptors[0].serialized_id])
+        self.assertIsNone(selected[descriptors[1].serialized_id])
+        self.assertEqual(
+            "private current label", selected[descriptors[2].serialized_id]
+        )
+        self.assertEqual(2**40, selected[descriptors[3].serialized_id])
+        self.assertIs(selected[descriptors[4].serialized_id], True)
+
+    async def test_menu_failure_is_categorized_and_cancellation_evicts_cache(
+        self,
+    ) -> None:
+        menu = _control(
+            0x00980900,
+            control_type=V4L2_CTRL_TYPE_MENU,
+            minimum=0,
+            maximum=0,
+        )
+        self.adapter.controls = [menu]
+        self.adapter.menu_items[(menu.id, 0)] = _V4L2QueryMenuItem(
+            0, None, "Private Label"
+        )
+        self.adapter.values[menu.id] = 0
+        self.adapter.failures["menu:0"] = OSError(
+            errno.EACCES, "raw menu payload and private path"
+        )
+        with self.assertRaises(V4L2ControlError) as caught:
+            await self.provider.get_controls(self.camera)
+        self.assertEqual("device_io", caught.exception.category)
+        self.adapter.failures.clear()
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        def block_read() -> None:
+            entered.set()
+            release.wait(3)
+
+        self.adapter.before_read = block_read
+        cancelled = asyncio.create_task(self.provider.get_controls(self.camera))
+        self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+        cancelled.cancel()
+        release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await cancelled
+        query_count = self._event_count("query")
+        self.adapter.before_read = None
+
+        await self.provider.get_controls(self.camera)
+
+        self.assertGreater(self._event_count("query"), query_count)
+        self.assertEqual({}, self.adapter._fd_nodes)
+
+    def _event_count(self, event_name: str) -> int:
+        return sum(1 for event in self.adapter.trace if event[0] == event_name)
 
 
 if __name__ == "__main__":
