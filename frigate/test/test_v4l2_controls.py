@@ -376,6 +376,48 @@ class TestV4L2DeviceTransactions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({}, state.cache_slots)
         self.assertEqual(1, state.generation)
 
+    async def test_resolution_disconnect_invalidates_bound_cache_before_reconnect(
+        self,
+    ) -> None:
+        state = None
+
+        def populate_cache(_adapter, _fd, _resolved, device_state):
+            nonlocal state
+            state = device_state
+            state.cache_slots["descriptor"] = "cached"
+
+        await self.executor.run(_camera(self.reference), populate_cache)
+        self.assertEqual(0, state.generation)
+        self.assertEqual({"descriptor": "cached"}, state.cache_slots)
+        matching_identity = self.adapter.identities.pop(self.reference)
+
+        with self.assertRaises(V4L2ControlError) as caught:
+            await self.executor.run(_camera(self.reference), lambda *_: "success")
+
+        self.assertEqual("device_disconnected", caught.exception.category)
+        self.assertEqual(1, state.generation)
+        self.assertEqual({}, state.cache_slots)
+        self.assertEqual(
+            1,
+            sum(1 for event in self.adapter.trace if event[0] == "validate"),
+        )
+
+        self.adapter.identities[self.reference] = matching_identity
+
+        def verify_fresh_state(_adapter, _fd, _resolved, device_state):
+            self.assertIs(state, device_state)
+            self.assertEqual(1, device_state.generation)
+            self.assertEqual({}, device_state.cache_slots)
+            return "reconnected"
+
+        result = await self.executor.run(_camera(self.reference), verify_fresh_state)
+
+        self.assertEqual("reconnected", result)
+        self.assertEqual(
+            2,
+            sum(1 for event in self.adapter.trace if event[0] == "validate"),
+        )
+
     async def test_other_io_failure_is_redacted(self) -> None:
         self.adapter.failures["open"] = OSError(
             errno.EACCES, f"cannot access {self.reference}: submitted=1234"

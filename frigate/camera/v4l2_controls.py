@@ -322,6 +322,22 @@ class _V4L2IdentityRegistry:
                 states=states,
             )
 
+    async def lease_bound(self, reference_digest: str) -> _RegistryLease | None:
+        """Lease the authoritative state currently bound to a reference."""
+        async with self._mutex:
+            binding = self._bindings.get(reference_digest)
+            if binding is None:
+                return None
+            state = self._states[binding.physical_key]
+            state.leases += 1
+            return _RegistryLease(
+                reference_digest=reference_digest,
+                candidate_key=binding.physical_key,
+                binding_version=binding.version,
+                prior_key=binding.physical_key,
+                states=(state,),
+            )
+
     async def snapshot_is_current(self, lease: _RegistryLease) -> bool:
         """Confirm the binding did not change while device locks were acquired."""
         async with self._mutex:
@@ -503,12 +519,32 @@ class V4L2DeviceTransactionExecutor:
                 reference_digest,
             )
         except Exception as error:
-            raise self._safe_error(error, camera_name, operation_name) from None
+            safe_error = self._safe_error(error, camera_name, operation_name)
+            if safe_error.category == "device_disconnected":
+                await self._invalidate_bound_reference(reference_digest)
+            raise safe_error from None
         if candidate.configured_reference_digest != reference_digest:
             raise V4L2ControlError(
                 "unstable_device_identity", camera_name, operation_name
             )
         return candidate
+
+    async def _invalidate_bound_reference(self, reference_digest: str) -> None:
+        """Invalidate a bound device state after resolution-time removal."""
+        while True:
+            lease = await self._registry.lease_bound(reference_digest)
+            if lease is None:
+                return
+            state = lease.states[0]
+            await state.lock.acquire()
+            try:
+                if not await self._registry.snapshot_is_current(lease):
+                    continue
+                state.invalidate()
+                return
+            finally:
+                state.lock.release()
+                await self._registry.release(lease)
 
     def _blocking_transaction(
         self,
