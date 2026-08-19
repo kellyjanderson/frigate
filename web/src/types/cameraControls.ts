@@ -68,3 +68,58 @@ export type DescriptorNormalizationResult =
       reason: DescriptorNormalizationReason;
       safeMetadata: DescriptorSafeMetadata;
     };
+
+export type DescriptorEditorKind =
+  | "boolean"
+  | "integer"
+  | "menu"
+  | "integer-menu"
+  | "button"
+  | "string"
+  | "labeled-bitmask"
+  | "numeric-bitmask"
+  | "unsupported";
+
+export type DescriptorValidationCode =
+  | "control_not_editable"
+  | "unsupported_type"
+  | "invalid_type"
+  | "non_finite_integer"
+  | "unsafe_integer"
+  | "out_of_range"
+  | "step_mismatch"
+  | "menu_value_not_found"
+  | "invalid_string_length"
+  | "invalid_bitmask";
+
+export type DescriptorValidationResult =
+  | { ok: true; value: CameraControlValue }
+  | { ok: false; code: DescriptorValidationCode };
+
+export type DescriptorCommitCallback = (
+  controlId: string,
+  value: CameraControlValue,
+) => void;
+
+export type DescriptorCommitState =
+  | {
+      status: "idle";
+      authoritativeValue: CameraControlValue;
+    }
+  | {
+      status: "pending";
+      authoritativeValue: CameraControlValue;
+      submittedValue: CameraControlValue;
+    }
+  | {
+      status: "success";
+      authoritativeValue: CameraControlValue;
+      submittedValue: CameraControlValue;
+    }
+  | {
+      status: "error";
+      authoritativeValue: CameraControlValue;
+      submittedValue: CameraControlValue;
+      code: string;
+      message: string;
+    };
