@@ -418,6 +418,47 @@ class TestV4L2DeviceTransactions(unittest.IsolatedAsyncioTestCase):
             sum(1 for event in self.adapter.trace if event[0] == "validate"),
         )
 
+    async def test_cancelled_resolution_invalidation_releases_bound_lease(
+        self,
+    ) -> None:
+        await self.executor.run(_camera(self.reference), lambda *_: None)
+        registry = self.executor._registry
+        identity = self.adapter.identities[self.reference]
+        reference_digest = identity.configured_reference_digest
+        state = registry._states[identity.physical_key]
+        prior_leases = state.leases
+        await state.lock.acquire()
+        original_lease_bound = registry.lease_bound
+        bound_lease_acquired = asyncio.Event()
+
+        async def traced_lease_bound(reference_digest):
+            lease = await original_lease_bound(reference_digest)
+            bound_lease_acquired.set()
+            return lease
+
+        registry.lease_bound = traced_lease_bound
+        self.adapter.identities.pop(self.reference)
+        invalidation = asyncio.create_task(
+            self.executor.run(_camera(self.reference), lambda *_: "success")
+        )
+        await asyncio.wait_for(bound_lease_acquired.wait(), 2)
+        self.assertEqual(prior_leases + 1, state.leases)
+        self.assertTrue(state.lock.locked())
+
+        invalidation.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await invalidation
+
+        self.assertEqual(prior_leases, state.leases)
+        self.assertTrue(state.lock.locked())
+        state.lock.release()
+
+        registry._bindings.pop(reference_digest)
+        state.stale = True
+        retirement_lease = await registry.lease(reference_digest, identity)
+        await registry.release(retirement_lease)
+        self.assertNotIn(identity.physical_key, registry._states)
+
     async def test_other_io_failure_is_redacted(self) -> None:
         self.adapter.failures["open"] = OSError(
             errno.EACCES, f"cannot access {self.reference}: submitted=1234"

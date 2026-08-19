@@ -536,14 +536,17 @@ class V4L2DeviceTransactionExecutor:
             if lease is None:
                 return
             state = lease.states[0]
-            await state.lock.acquire()
+            acquired = False
             try:
+                await state.lock.acquire()
+                acquired = True
                 if not await self._registry.snapshot_is_current(lease):
                     continue
                 state.invalidate()
                 return
             finally:
-                state.lock.release()
+                if acquired:
+                    state.lock.release()
                 await self._registry.release(lease)
 
     def _blocking_transaction(
