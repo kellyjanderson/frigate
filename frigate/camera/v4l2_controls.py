@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import errno
 import fcntl
 import hashlib
 import os
 import re
 import struct
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections import OrderedDict
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
@@ -27,13 +29,187 @@ _DISCONNECTED_ERRNOS = {
     errno.ESHUTDOWN,
 }
 
+V4L2_CTRL_FLAG_DISABLED = 0x0001
+V4L2_CTRL_FLAG_GRABBED = 0x0002
+V4L2_CTRL_FLAG_READ_ONLY = 0x0004
+V4L2_CTRL_FLAG_INACTIVE = 0x0010
+V4L2_CTRL_FLAG_WRITE_ONLY = 0x0040
+V4L2_CTRL_FLAG_HAS_PAYLOAD = 0x0100
+V4L2_CTRL_FLAG_NEXT_CTRL = 0x80000000
+V4L2_CTRL_FLAG_NEXT_COMPOUND = 0x40000000
+
+V4L2_CTRL_TYPE_INTEGER = 1
+V4L2_CTRL_TYPE_BOOLEAN = 2
+V4L2_CTRL_TYPE_MENU = 3
+V4L2_CTRL_TYPE_BUTTON = 4
+V4L2_CTRL_TYPE_INTEGER64 = 5
+V4L2_CTRL_TYPE_CTRL_CLASS = 6
+V4L2_CTRL_TYPE_STRING = 7
+V4L2_CTRL_TYPE_BITMASK = 8
+V4L2_CTRL_TYPE_INTEGER_MENU = 9
+V4L2_CTRL_TYPE_U8 = 0x0100
+V4L2_CTRL_TYPE_U16 = 0x0101
+V4L2_CTRL_TYPE_U32 = 0x0102
+
+_V4L2_CTRL_ID_MASK = 0x0FFF0000
+_V4L2_CTRL_MAX_DIMS = 4
+_DESCRIPTOR_CACHE_SLOT = "control_descriptors"
+_CANONICAL_CONTROL_ID = re.compile(r"^0x[0-9a-f]{8}$")
+_SCALAR_CONTROL_TYPES = {
+    V4L2_CTRL_TYPE_INTEGER,
+    V4L2_CTRL_TYPE_BOOLEAN,
+    V4L2_CTRL_TYPE_MENU,
+    V4L2_CTRL_TYPE_INTEGER64,
+    V4L2_CTRL_TYPE_BITMASK,
+    V4L2_CTRL_TYPE_INTEGER_MENU,
+}
+
+
+def _iowr(number: int, structure: type[ctypes.Structure]) -> int:
+    """Build a Linux read/write ioctl request for one ctypes structure."""
+    return (3 << 30) | (ctypes.sizeof(structure) << 16) | (ord("V") << 8) | number
+
+
+class _QueryExtControlBuffer(ctypes.Structure):
+    _fields_ = [
+        ("id", ctypes.c_uint32),
+        ("type", ctypes.c_uint32),
+        ("name", ctypes.c_ubyte * 32),
+        ("minimum", ctypes.c_int64),
+        ("maximum", ctypes.c_int64),
+        ("step", ctypes.c_uint64),
+        ("default_value", ctypes.c_int64),
+        ("flags", ctypes.c_uint32),
+        ("elem_size", ctypes.c_uint32),
+        ("elems", ctypes.c_uint32),
+        ("nr_of_dims", ctypes.c_uint32),
+        ("dims", ctypes.c_uint32 * _V4L2_CTRL_MAX_DIMS),
+        ("reserved", ctypes.c_uint32 * 32),
+    ]
+
+
+class _QueryMenuValue(ctypes.Union):
+    _fields_ = [  # noqa: RUF012
+        ("name", ctypes.c_ubyte * 32),
+        ("value", ctypes.c_int64),
+    ]
+
+
+class _QueryMenuBuffer(ctypes.Structure):
+    _pack_ = 1
+    _anonymous_ = ("data",)
+    _fields_ = [
+        ("id", ctypes.c_uint32),
+        ("index", ctypes.c_uint32),
+        ("data", _QueryMenuValue),
+        ("reserved", ctypes.c_uint32),
+    ]
+
+
+class _ExtControlValue(ctypes.Union):
+    _fields_ = [  # noqa: RUF012
+        ("value", ctypes.c_int32),
+        ("value64", ctypes.c_int64),
+        ("string", ctypes.c_void_p),
+        ("p_u8", ctypes.POINTER(ctypes.c_uint8)),
+        ("p_u16", ctypes.POINTER(ctypes.c_uint16)),
+        ("p_u32", ctypes.POINTER(ctypes.c_uint32)),
+        ("ptr", ctypes.c_void_p),
+    ]
+
+
+class _ExtControlBuffer(ctypes.Structure):
+    _pack_ = 1
+    _anonymous_ = ("data",)
+    _fields_ = [
+        ("id", ctypes.c_uint32),
+        ("size", ctypes.c_uint32),
+        ("reserved2", ctypes.c_uint32 * 1),
+        ("data", _ExtControlValue),
+    ]
+
+
+class _ExtControlsBuffer(ctypes.Structure):
+    _fields_ = [
+        ("which", ctypes.c_uint32),
+        ("count", ctypes.c_uint32),
+        ("error_idx", ctypes.c_uint32),
+        ("request_fd", ctypes.c_int32),
+        ("reserved", ctypes.c_uint32 * 1),
+        ("controls", ctypes.POINTER(_ExtControlBuffer)),
+    ]
+
+
+_VIDIOC_QUERY_EXT_CTRL = _iowr(103, _QueryExtControlBuffer)
+_VIDIOC_QUERYMENU = _iowr(37, _QueryMenuBuffer)
+_VIDIOC_G_EXT_CTRLS = _iowr(71, _ExtControlsBuffer)
+
 V4L2ErrorCategory = Literal[
     "not_configured",
     "unstable_device_identity",
     "device_disconnected",
     "device_io",
+    "invalid_control_ids",
+    "control_not_found",
 ]
 T = TypeVar("T")
+
+V4L2ControlValue = bool | int | str | bytes | tuple[bool | int | str, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class V4L2MenuItem:
+    """One ordinary or integer V4L2 menu entry."""
+
+    index: int
+    value: int | None
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class V4L2ControlDescriptor:
+    """Complete immutable metadata and current state for one V4L2 control."""
+
+    id: int
+    serialized_id: str
+    name: str
+    control_class: int
+    control_type: int
+    minimum: int
+    maximum: int
+    step: int
+    default_value: int
+    current_value: V4L2ControlValue
+    menu_items: tuple[V4L2MenuItem, ...]
+    flags: int
+    element_size: int
+    element_count: int
+    dimensions: tuple[int, ...]
+    active: bool
+    writable: bool
+    read_supported: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _V4L2QueryControl:
+    id: int
+    control_type: int
+    name: str
+    minimum: int
+    maximum: int
+    step: int
+    default_value: int
+    flags: int
+    element_size: int
+    element_count: int
+    dimensions: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _V4L2QueryMenuItem:
+    index: int
+    value: int | None
+    label: str
 
 
 class _IdentityChangedError(Exception):
@@ -153,13 +329,158 @@ class V4L2Adapter:
         """Issue a downstream ioctl against the validated open descriptor."""
         return fcntl.ioctl(fd, request, argument, mutate_flag)
 
+    def query_control(self, fd: int, control_id: int) -> _V4L2QueryControl:
+        """Return the next extended-control descriptor from the driver."""
+        query = _QueryExtControlBuffer(id=control_id)
+        self.ioctl(fd, _VIDIOC_QUERY_EXT_CTRL, query)
+        dimensions = tuple(query.dims[: query.nr_of_dims])
+        return _V4L2QueryControl(
+            id=query.id,
+            control_type=query.type,
+            name=self._decode_c_string(bytes(query.name)),
+            minimum=query.minimum,
+            maximum=query.maximum,
+            step=query.step,
+            default_value=query.default_value,
+            flags=query.flags,
+            element_size=query.elem_size,
+            element_count=query.elems,
+            dimensions=dimensions,
+        )
+
+    def query_menu(
+        self,
+        fd: int,
+        control_id: int,
+        index: int,
+        *,
+        integer_menu: bool,
+    ) -> _V4L2QueryMenuItem:
+        """Return one ordinary or integer menu item."""
+        query = _QueryMenuBuffer(id=control_id, index=index)
+        self.ioctl(fd, _VIDIOC_QUERYMENU, query)
+        return _V4L2QueryMenuItem(
+            index=index,
+            value=query.value if integer_menu else None,
+            label=(
+                str(query.value)
+                if integer_menu
+                else self._decode_c_string(bytes(query.name))
+            ),
+        )
+
+    def get_control_values(
+        self,
+        fd: int,
+        controls: Sequence[V4L2ControlDescriptor],
+        *,
+        control_class: int = 0,
+    ) -> Mapping[int, V4L2ControlValue]:
+        """Read a compatible group of current control values."""
+        if not controls:
+            return {}
+
+        control_buffers = (_ExtControlBuffer * len(controls))()
+        allocations: list[ctypes.Array[Any]] = []
+        for index, descriptor in enumerate(controls):
+            control = control_buffers[index]
+            control.id = descriptor.id
+            allocation = self._prepare_read_buffer(control, descriptor)
+            if allocation is not None:
+                allocations.append(allocation)
+
+        request = _ExtControlsBuffer(
+            which=control_class,
+            count=len(controls),
+            request_fd=0,
+            controls=control_buffers,
+        )
+        self.ioctl(fd, _VIDIOC_G_EXT_CTRLS, request)
+        return {
+            descriptor.id: self._decode_control_value(
+                control_buffers[index], descriptor
+            )
+            for index, descriptor in enumerate(controls)
+        }
+
+    @staticmethod
+    def _prepare_read_buffer(
+        control: _ExtControlBuffer,
+        descriptor: V4L2ControlDescriptor,
+    ) -> ctypes.Array[Any] | None:
+        allocation: ctypes.Array[Any]
+        if descriptor.control_type == V4L2_CTRL_TYPE_STRING:
+            size = max(
+                descriptor.maximum + 1,
+                descriptor.element_size * descriptor.element_count,
+                1,
+            )
+            allocation = (ctypes.c_char * size)()
+        elif descriptor.control_type == V4L2_CTRL_TYPE_U16:
+            allocation = (ctypes.c_uint16 * descriptor.element_count)()
+        elif descriptor.control_type == V4L2_CTRL_TYPE_U32:
+            allocation = (ctypes.c_uint32 * descriptor.element_count)()
+        elif descriptor.flags & V4L2_CTRL_FLAG_HAS_PAYLOAD or descriptor.dimensions:
+            size = descriptor.element_size * descriptor.element_count
+            allocation = (ctypes.c_uint8 * size)()
+        else:
+            return None
+
+        control.size = ctypes.sizeof(allocation)
+        control.ptr = ctypes.cast(allocation, ctypes.c_void_p)
+        return allocation
+
+    @staticmethod
+    def _decode_control_value(
+        control: _ExtControlBuffer,
+        descriptor: V4L2ControlDescriptor,
+    ) -> V4L2ControlValue:
+        if descriptor.flags & V4L2_CTRL_FLAG_HAS_PAYLOAD or descriptor.dimensions:
+            if descriptor.control_type == V4L2_CTRL_TYPE_BOOLEAN:
+                values = ctypes.cast(control.ptr, ctypes.POINTER(ctypes.c_int32))
+                return tuple(
+                    bool(value) for value in values[: descriptor.element_count]
+                )
+            if descriptor.control_type in {
+                V4L2_CTRL_TYPE_INTEGER,
+                V4L2_CTRL_TYPE_MENU,
+                V4L2_CTRL_TYPE_BITMASK,
+                V4L2_CTRL_TYPE_INTEGER_MENU,
+            }:
+                values = ctypes.cast(control.ptr, ctypes.POINTER(ctypes.c_int32))
+                return tuple(values[: descriptor.element_count])
+            if descriptor.control_type == V4L2_CTRL_TYPE_INTEGER64:
+                int64_values = ctypes.cast(control.ptr, ctypes.POINTER(ctypes.c_int64))
+                return tuple(int64_values[: descriptor.element_count])
+        if descriptor.control_type == V4L2_CTRL_TYPE_BOOLEAN:
+            return bool(control.value)
+        if descriptor.control_type == V4L2_CTRL_TYPE_INTEGER64:
+            return int(control.value64)
+        if descriptor.control_type in _SCALAR_CONTROL_TYPES:
+            return int(control.value)
+        if descriptor.control_type == V4L2_CTRL_TYPE_STRING:
+            value = ctypes.string_at(control.ptr, control.size).split(b"\0", 1)[0]
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        if descriptor.control_type == V4L2_CTRL_TYPE_U8:
+            return ctypes.string_at(control.ptr, control.size)
+        if descriptor.control_type == V4L2_CTRL_TYPE_U16:
+            return tuple(control.p_u16[: descriptor.element_count])
+        if descriptor.control_type == V4L2_CTRL_TYPE_U32:
+            return tuple(control.p_u32[: descriptor.element_count])
+        if control.ptr and control.size:
+            return ctypes.string_at(control.ptr, control.size)
+        return None
+
     def close_device(self, fd: int) -> None:
         """Close a transaction-owned descriptor."""
         os.close(fd)
 
     @staticmethod
     def _decode_c_string(value: bytes) -> str:
-        return value.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+        return value.split(b"\0", 1)[0].decode("utf-8")
 
     @classmethod
     def _udev_properties(cls, device_node: str) -> dict[str, str]:
@@ -623,3 +944,279 @@ class V4L2DeviceTransactionExecutor:
             identity_digest=identity_digest,
             private_cause=error,
         )
+
+
+class V4L2ControlProvider:
+    """Discover V4L2 controls and return authoritative live values."""
+
+    def __init__(
+        self,
+        executor: V4L2DeviceTransactionExecutor | None = None,
+    ) -> None:
+        self._executor = executor or V4L2DeviceTransactionExecutor()
+
+    async def get_controls(
+        self,
+        camera_config: CameraConfig,
+        *,
+        refresh: bool = False,
+    ) -> tuple[V4L2ControlDescriptor, ...]:
+        """Return complete ordered descriptors with freshly read values."""
+
+        def discover_and_read(
+            adapter: V4L2Adapter,
+            fd: int,
+            _resolved: _ResolvedV4L2Device,
+            state: _V4L2DeviceState,
+        ) -> tuple[V4L2ControlDescriptor, ...]:
+            if refresh:
+                state.cache_slots.pop(_DESCRIPTOR_CACHE_SLOT, None)
+            descriptors = self._descriptors(adapter, fd, state)
+            values: dict[int, V4L2ControlValue] = {}
+            groups: OrderedDict[int, list[V4L2ControlDescriptor]] = OrderedDict()
+            for descriptor in descriptors:
+                if descriptor.read_supported:
+                    groups.setdefault(descriptor.control_class, []).append(descriptor)
+            for control_class, group in groups.items():
+                values.update(
+                    adapter.get_control_values(
+                        fd,
+                        group,
+                        control_class=control_class,
+                    )
+                )
+            return tuple(
+                self._descriptor_with_current_value(
+                    descriptor,
+                    values.get(descriptor.id),
+                )
+                for descriptor in descriptors
+            )
+
+        return await self._executor.run(
+            camera_config,
+            discover_and_read,
+            operation_name="get_controls",
+        )
+
+    async def get_control_values(
+        self,
+        camera_config: CameraConfig,
+        serialized_ids: Iterable[str],
+    ) -> Mapping[str, bool | int | str | None]:
+        """Return one bounded ordered selection of scalar live values."""
+        ids = self._validated_control_ids(camera_config, serialized_ids)
+
+        def read_selected(
+            adapter: V4L2Adapter,
+            fd: int,
+            _resolved: _ResolvedV4L2Device,
+            state: _V4L2DeviceState,
+        ) -> Mapping[str, bool | int | str | None]:
+            descriptors = self._descriptors(adapter, fd, state)
+            descriptors_by_id = {
+                descriptor.serialized_id: descriptor for descriptor in descriptors
+            }
+            try:
+                selected = tuple(
+                    descriptors_by_id[serialized_id] for serialized_id in ids
+                )
+            except KeyError as error:
+                raise V4L2ControlError(
+                    "control_not_found",
+                    camera_config.name or "unnamed",
+                    "get_control_values",
+                ) from error
+
+            readable = tuple(
+                descriptor
+                for descriptor in selected
+                if self._supports_scalar_read(descriptor)
+            )
+            values = adapter.get_control_values(fd, readable) if readable else {}
+            return OrderedDict(
+                (
+                    descriptor.serialized_id,
+                    self._scalar_value(values.get(descriptor.id)),
+                )
+                for descriptor in selected
+            )
+
+        return await self._executor.run(
+            camera_config,
+            read_selected,
+            operation_name="get_control_values",
+        )
+
+    @staticmethod
+    def _validated_control_ids(
+        camera_config: CameraConfig,
+        serialized_ids: Iterable[str],
+    ) -> tuple[str, ...]:
+        try:
+            ids = tuple(serialized_ids)
+        except TypeError as error:
+            raise V4L2ControlError(
+                "invalid_control_ids",
+                camera_config.name or "unnamed",
+                "get_control_values",
+            ) from error
+        malformed = any(
+            not isinstance(serialized_id, str)
+            or _CANONICAL_CONTROL_ID.fullmatch(serialized_id) is None
+            for serialized_id in ids
+        )
+        if not 1 <= len(ids) <= 64 or malformed or len(set(ids)) != len(ids):
+            raise V4L2ControlError(
+                "invalid_control_ids",
+                camera_config.name or "unnamed",
+                "get_control_values",
+            )
+        return ids
+
+    def _descriptors(
+        self,
+        adapter: V4L2Adapter,
+        fd: int,
+        state: _V4L2DeviceState,
+    ) -> tuple[V4L2ControlDescriptor, ...]:
+        cached = state.cache_slots.get(_DESCRIPTOR_CACHE_SLOT)
+        if isinstance(cached, tuple) and all(
+            isinstance(item, V4L2ControlDescriptor) for item in cached
+        ):
+            return cached
+        descriptors = self._enumerate_descriptors(adapter, fd)
+        state.cache_slots[_DESCRIPTOR_CACHE_SLOT] = descriptors
+        return descriptors
+
+    def _enumerate_descriptors(
+        self,
+        adapter: V4L2Adapter,
+        fd: int,
+    ) -> tuple[V4L2ControlDescriptor, ...]:
+        descriptors: list[V4L2ControlDescriptor] = []
+        query_id = V4L2_CTRL_FLAG_NEXT_CTRL | V4L2_CTRL_FLAG_NEXT_COMPOUND
+        while True:
+            try:
+                query = adapter.query_control(fd, query_id)
+            except OSError as error:
+                if error.errno == errno.EINVAL:
+                    break
+                raise
+            menu_items = self._menu_items(adapter, fd, query)
+            descriptors.append(self._descriptor(query, menu_items))
+            query_id = (
+                query.id | V4L2_CTRL_FLAG_NEXT_CTRL | V4L2_CTRL_FLAG_NEXT_COMPOUND
+            )
+        return tuple(descriptors)
+
+    @staticmethod
+    def _menu_items(
+        adapter: V4L2Adapter,
+        fd: int,
+        query: _V4L2QueryControl,
+    ) -> tuple[V4L2MenuItem, ...]:
+        if query.control_type not in (
+            V4L2_CTRL_TYPE_MENU,
+            V4L2_CTRL_TYPE_INTEGER_MENU,
+        ):
+            return ()
+        items: list[V4L2MenuItem] = []
+        for index in range(query.minimum, query.maximum + 1):
+            try:
+                item = adapter.query_menu(
+                    fd,
+                    query.id,
+                    index,
+                    integer_menu=query.control_type == V4L2_CTRL_TYPE_INTEGER_MENU,
+                )
+            except OSError as error:
+                if error.errno == errno.EINVAL:
+                    continue
+                raise
+            items.append(V4L2MenuItem(item.index, item.value, item.label))
+        return tuple(items)
+
+    @staticmethod
+    def _descriptor(
+        query: _V4L2QueryControl,
+        menu_items: tuple[V4L2MenuItem, ...],
+    ) -> V4L2ControlDescriptor:
+        active = not query.flags & (V4L2_CTRL_FLAG_DISABLED | V4L2_CTRL_FLAG_INACTIVE)
+        writable = active and not query.flags & (
+            V4L2_CTRL_FLAG_READ_ONLY | V4L2_CTRL_FLAG_GRABBED
+        )
+        return V4L2ControlDescriptor(
+            id=query.id,
+            serialized_id=f"0x{query.id:08x}",
+            name=query.name,
+            control_class=query.id & _V4L2_CTRL_ID_MASK,
+            control_type=query.control_type,
+            minimum=query.minimum,
+            maximum=query.maximum,
+            step=query.step,
+            default_value=query.default_value,
+            current_value=None,
+            menu_items=menu_items,
+            flags=query.flags,
+            element_size=query.element_size,
+            element_count=query.element_count,
+            dimensions=query.dimensions,
+            active=active,
+            writable=writable,
+            read_supported=V4L2ControlProvider._supports_lossless_read(query),
+        )
+
+    @staticmethod
+    def _supports_lossless_read(query: _V4L2QueryControl) -> bool:
+        if query.flags & V4L2_CTRL_FLAG_WRITE_ONLY:
+            return False
+        if query.control_type in (V4L2_CTRL_TYPE_BUTTON, V4L2_CTRL_TYPE_CTRL_CLASS):
+            return False
+        if query.control_type in _SCALAR_CONTROL_TYPES:
+            if not query.dimensions and not (query.flags & V4L2_CTRL_FLAG_HAS_PAYLOAD):
+                return True
+            expected_size = 8 if query.control_type == V4L2_CTRL_TYPE_INTEGER64 else 4
+            return query.element_size == expected_size and query.element_count > 0
+        if query.control_type == V4L2_CTRL_TYPE_STRING:
+            return True
+        if query.control_type in (
+            V4L2_CTRL_TYPE_U8,
+            V4L2_CTRL_TYPE_U16,
+            V4L2_CTRL_TYPE_U32,
+        ):
+            return query.element_count > 0
+        return bool(
+            query.flags & V4L2_CTRL_FLAG_HAS_PAYLOAD
+            and query.element_size > 0
+            and query.element_count > 0
+        )
+
+    @staticmethod
+    def _supports_scalar_read(descriptor: V4L2ControlDescriptor) -> bool:
+        return (
+            descriptor.read_supported
+            and not descriptor.dimensions
+            and (
+                descriptor.control_type == V4L2_CTRL_TYPE_STRING
+                or (
+                    not descriptor.flags & V4L2_CTRL_FLAG_HAS_PAYLOAD
+                    and descriptor.control_type in _SCALAR_CONTROL_TYPES
+                )
+            )
+        )
+
+    @staticmethod
+    def _descriptor_with_current_value(
+        descriptor: V4L2ControlDescriptor,
+        value: V4L2ControlValue,
+    ) -> V4L2ControlDescriptor:
+        return replace(
+            descriptor,
+            current_value=value,
+            read_supported=descriptor.read_supported and value is not None,
+        )
+
+    @staticmethod
+    def _scalar_value(value: V4L2ControlValue) -> bool | int | str | None:
+        return value if isinstance(value, bool | int | str) else None
