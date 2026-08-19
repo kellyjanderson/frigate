@@ -408,6 +408,7 @@ class V4L2Adapter:
         control: _ExtControlBuffer,
         descriptor: V4L2ControlDescriptor,
     ) -> ctypes.Array[Any] | None:
+        allocation: ctypes.Array[Any]
         if descriptor.control_type == V4L2_CTRL_TYPE_STRING:
             size = max(
                 descriptor.maximum + 1,
@@ -449,14 +450,14 @@ class V4L2Adapter:
                 values = ctypes.cast(control.ptr, ctypes.POINTER(ctypes.c_int32))
                 return tuple(values[: descriptor.element_count])
             if descriptor.control_type == V4L2_CTRL_TYPE_INTEGER64:
-                values = ctypes.cast(control.ptr, ctypes.POINTER(ctypes.c_int64))
-                return tuple(values[: descriptor.element_count])
+                int64_values = ctypes.cast(control.ptr, ctypes.POINTER(ctypes.c_int64))
+                return tuple(int64_values[: descriptor.element_count])
         if descriptor.control_type == V4L2_CTRL_TYPE_BOOLEAN:
             return bool(control.value)
         if descriptor.control_type == V4L2_CTRL_TYPE_INTEGER64:
-            return control.value64
+            return int(control.value64)
         if descriptor.control_type in _SCALAR_CONTROL_TYPES:
-            return control.value
+            return int(control.value)
         if descriptor.control_type == V4L2_CTRL_TYPE_STRING:
             value = ctypes.string_at(control.ptr, control.size).split(b"\0", 1)[0]
             try:
