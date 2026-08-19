@@ -1,8 +1,14 @@
 import type {
   CameraControlDescriptor,
+  DescriptorCommitCallback,
+  DescriptorCommitState,
   DescriptorNormalizationResult,
 } from "@/types/cameraControls";
-import { normalizeCameraControlDescriptor } from "./cameraControlDescriptors";
+import {
+  getDescriptorEditorKind,
+  normalizeCameraControlDescriptor,
+  validateDescriptorValue,
+} from "./cameraControlDescriptors";
 import { describe, expect, it } from "vitest";
 
 function integerDescriptor(overrides: Record<string, unknown> = {}) {
@@ -633,5 +639,404 @@ describe("camera control descriptor normalization", () => {
       /video-secret|bytes|Bearer|private failure|raw_payload|ioctl/,
     );
     expect(consumePublicResult(result)).toBe("malformed_descriptor:0x00980900");
+  });
+});
+
+describe("camera control descriptor value policy", () => {
+  function normalized(overrides: Record<string, unknown> = {}) {
+    return requireDescriptor(
+      normalizeCameraControlDescriptor(integerDescriptor(overrides)),
+    );
+  }
+
+  it.each([
+    ["integer", {}, "integer"],
+    [
+      "boolean",
+      { control_type: 2, default_value: true, current_value: false },
+      "boolean",
+    ],
+    [
+      "menu",
+      {
+        control_type: 3,
+        minimum: 0,
+        maximum: 4,
+        default_value: 0,
+        current_value: 4,
+        menu_items: [
+          { index: 4, value: null, label: "Manual" },
+          { index: 0, value: null, label: "Auto" },
+        ],
+      },
+      "menu",
+    ],
+    [
+      "integer menu",
+      {
+        control_type: 9,
+        minimum: 1,
+        maximum: 5,
+        default_value: 1,
+        current_value: 5,
+        menu_items: [
+          { index: 1, value: 50, label: "50 Hz" },
+          { index: 5, value: 60, label: "60 Hz" },
+        ],
+      },
+      "integer-menu",
+    ],
+    [
+      "button",
+      {
+        control_type: 4,
+        minimum: null,
+        maximum: null,
+        step: null,
+        default_value: null,
+        current_value: null,
+      },
+      "button",
+    ],
+    [
+      "string",
+      {
+        control_type: 7,
+        minimum: 0,
+        maximum: 3,
+        step: 1,
+        default_value: "",
+        current_value: "cam",
+        flags: 0x0100,
+        element_size: 4,
+      },
+      "string",
+    ],
+    [
+      "labeled bitmask",
+      {
+        control_type: 8,
+        default_value: 1,
+        current_value: 5,
+        menu_items: [{ index: 0, value: 1, label: "First" }],
+      },
+      "labeled-bitmask",
+    ],
+    [
+      "numeric bitmask",
+      { control_type: 8, default_value: 1, current_value: 5 },
+      "numeric-bitmask",
+    ],
+  ])("maps a normalized %s descriptor to %s", (_name, fixture, expected) => {
+    expect(getDescriptorEditorKind(normalized(fixture))).toBe(expected);
+  });
+
+  it("maps a defensively unmapped type to unsupported", () => {
+    const descriptor = normalized();
+    descriptor.control_type = 99;
+
+    expect(getDescriptorEditorKind(descriptor)).toBe("unsupported");
+    expect(validateDescriptorValue(descriptor, 10)).toEqual({
+      ok: false,
+      code: "unsupported_type",
+    });
+  });
+
+  it.each([
+    ["backend inactive", { active: false }],
+    ["backend nonwritable", { writable: false }],
+    ["disabled", { flags: 0x0001 }],
+    ["inactive", { flags: 0x0010 }],
+    ["read-only", { flags: 0x0004 }],
+    ["grabbed", { flags: 0x0002 }],
+  ])("retains editor kind but denies %s controls first", (_name, fixture) => {
+    const descriptor = normalized(fixture);
+
+    expect(getDescriptorEditorKind(descriptor)).toBe("integer");
+    expect(validateDescriptorValue(descriptor, "not parsed")).toEqual({
+      ok: false,
+      code: "control_not_editable",
+    });
+  });
+
+  it("accepts exact booleans and button null without coercion", () => {
+    const boolean = normalized({
+      control_type: 2,
+      default_value: true,
+      current_value: false,
+    });
+    const button = normalized({
+      control_type: 4,
+      minimum: null,
+      maximum: null,
+      step: null,
+      default_value: null,
+      current_value: null,
+    });
+
+    expect(validateDescriptorValue(boolean, false)).toEqual({
+      ok: true,
+      value: false,
+    });
+    expect(validateDescriptorValue(boolean, 0)).toEqual({
+      ok: false,
+      code: "invalid_type",
+    });
+    expect(validateDescriptorValue(button, null)).toEqual({
+      ok: true,
+      value: null,
+    });
+    expect(validateDescriptorValue(button, false)).toEqual({
+      ok: false,
+      code: "invalid_type",
+    });
+  });
+
+  it.each([
+    ["wrong type", "12", "invalid_type"],
+    ["non-finite", Number.POSITIVE_INFINITY, "non_finite_integer"],
+    ["fractional", 12.5, "non_finite_integer"],
+    ["unsafe", Number.MAX_SAFE_INTEGER + 1, "unsafe_integer"],
+    ["below minimum", 9, "out_of_range"],
+    ["above maximum", 21, "out_of_range"],
+    ["off step", 11, "step_mismatch"],
+  ])("rejects an integer candidate that is %s", (_name, candidate, code) => {
+    const descriptor = normalized({
+      minimum: 10,
+      maximum: 20,
+      step: 2,
+      default_value: 10,
+      current_value: 12,
+    });
+
+    expect(validateDescriptorValue(descriptor, candidate)).toEqual({
+      ok: false,
+      code,
+    });
+  });
+
+  it("accepts inclusive aligned integer bounds and defaults invalid steps", () => {
+    const descriptor = normalized({
+      minimum: 10,
+      maximum: 20,
+      step: 2,
+      default_value: 10,
+      current_value: 12,
+    });
+    const defensiveDescriptor = {
+      ...descriptor,
+      step: 0,
+    } satisfies CameraControlDescriptor;
+
+    expect(validateDescriptorValue(descriptor, 10)).toEqual({
+      ok: true,
+      value: 10,
+    });
+    expect(validateDescriptorValue(descriptor, 20)).toEqual({
+      ok: true,
+      value: 20,
+    });
+    expect(validateDescriptorValue(defensiveDescriptor, 11)).toEqual({
+      ok: true,
+      value: 11,
+    });
+  });
+
+  it("distinguishes sparse menu indexes from integer-menu values", () => {
+    const menu = normalized({
+      control_type: 3,
+      minimum: 0,
+      maximum: 4,
+      default_value: 0,
+      current_value: 4,
+      menu_items: [
+        { index: 4, value: null, label: "Manual" },
+        { index: 0, value: null, label: "Auto" },
+      ],
+    });
+    const integerMenu = normalized({
+      control_type: 9,
+      minimum: 1,
+      maximum: 5,
+      default_value: 1,
+      current_value: 5,
+      menu_items: [
+        { index: 1, value: 50, label: "50 Hz" },
+        { index: 5, value: 60, label: "60 Hz" },
+      ],
+    });
+
+    expect(validateDescriptorValue(menu, 4)).toEqual({ ok: true, value: 4 });
+    expect(validateDescriptorValue(menu, 1)).toEqual({
+      ok: false,
+      code: "menu_value_not_found",
+    });
+    expect(validateDescriptorValue(integerMenu, 60)).toEqual({
+      ok: true,
+      value: 60,
+    });
+    expect(validateDescriptorValue(integerMenu, 5)).toEqual({
+      ok: false,
+      code: "menu_value_not_found",
+    });
+  });
+
+  it("preserves strings and validates Unicode code-point length", () => {
+    const descriptor = normalized({
+      control_type: 7,
+      minimum: 1,
+      maximum: 3,
+      step: 1,
+      default_value: "a",
+      current_value: "cam",
+      flags: 0x0100,
+      element_size: 4,
+    });
+
+    expect(validateDescriptorValue(descriptor, " a ")).toEqual({
+      ok: true,
+      value: " a ",
+    });
+    expect(validateDescriptorValue(descriptor, "😀😀")).toEqual({
+      ok: true,
+      value: "😀😀",
+    });
+    expect(validateDescriptorValue(descriptor, "")).toEqual({
+      ok: false,
+      code: "invalid_string_length",
+    });
+    expect(validateDescriptorValue(descriptor, "four")).toEqual({
+      ok: false,
+      code: "invalid_string_length",
+    });
+    expect(validateDescriptorValue(descriptor, 1)).toEqual({
+      ok: false,
+      code: "invalid_type",
+    });
+  });
+
+  it.each([
+    [15, 15],
+    ["15", 15],
+    ["0x0f", 15],
+    ["0X0F", 15],
+  ])("parses a complete bitmask %j as %d", (candidate, expected) => {
+    const descriptor = normalized({
+      control_type: 8,
+      minimum: 0,
+      maximum: 255,
+      default_value: 1,
+      current_value: 5,
+    });
+
+    expect(validateDescriptorValue(descriptor, candidate)).toEqual({
+      ok: true,
+      value: expected,
+    });
+  });
+
+  it.each([
+    ["wrong type", {}, "invalid_type"],
+    ["negative number", -1, "invalid_bitmask"],
+    ["fractional number", 1.5, "invalid_bitmask"],
+    ["signed string", "+1", "invalid_bitmask"],
+    ["whitespace", " 1", "invalid_bitmask"],
+    ["fraction", "1.5", "invalid_bitmask"],
+    ["exponent", "1e2", "invalid_bitmask"],
+    ["empty hex", "0x", "invalid_bitmask"],
+    ["trailing text", "0x1z", "invalid_bitmask"],
+    ["unsafe number", Number.MAX_SAFE_INTEGER + 1, "unsafe_integer"],
+    ["unsafe string", "9007199254740992", "unsafe_integer"],
+    ["above bounds", 256, "out_of_range"],
+  ])("rejects a bitmask with %s", (_name, candidate, code) => {
+    const descriptor = normalized({
+      control_type: 8,
+      minimum: 0,
+      maximum: 255,
+      default_value: 1,
+      current_value: 5,
+    });
+
+    expect(validateDescriptorValue(descriptor, candidate)).toEqual({
+      ok: false,
+      code,
+    });
+  });
+
+  it("preserves unknown bits when a caller changes one labeled bit", () => {
+    const descriptor = normalized({
+      control_type: 8,
+      minimum: 0,
+      maximum: 255,
+      default_value: 1,
+      current_value: 0b10000101,
+      menu_items: [
+        { index: 0, value: 1, label: "First" },
+        { index: 2, value: 4, label: "Third" },
+      ],
+    });
+    const authoritative = descriptor.current_value as number;
+    const clearedThird = authoritative & ~0b100;
+    const setThird = clearedThird | 0b100;
+
+    expect(validateDescriptorValue(descriptor, clearedThird)).toEqual({
+      ok: true,
+      value: 0b10000001,
+    });
+    expect(validateDescriptorValue(descriptor, setThird)).toEqual({
+      ok: true,
+      value: authoritative,
+    });
+  });
+
+  it("emits one synchronous canonical commit intent only after validation", () => {
+    const descriptor = normalized({ step: 2, current_value: 128 });
+    const deniedDescriptor = normalized({ writable: false });
+    const unsupportedDescriptor = normalized();
+    unsupportedDescriptor.control_type = 99;
+    const intents: Array<[string, unknown]> = [];
+    const commit: DescriptorCommitCallback = (controlId, value) => {
+      intents.push([controlId, value]);
+    };
+
+    function validateAndCommit(
+      target: CameraControlDescriptor,
+      candidate: unknown,
+    ) {
+      const result = validateDescriptorValue(target, candidate);
+      if (result.ok) {
+        return commit(target.serialized_id, result.value);
+      }
+    }
+
+    expect(validateAndCommit(descriptor, 130)).toBeUndefined();
+    validateAndCommit(descriptor, 131);
+    validateAndCommit(deniedDescriptor, 130);
+    validateAndCommit(unsupportedDescriptor, 130);
+
+    expect(intents).toEqual([["0x00980900", 130]]);
+  });
+
+  it("keeps authoritative values caller-controlled across commit states", () => {
+    const states: DescriptorCommitState[] = [
+      { status: "idle", authoritativeValue: 10 },
+      { status: "pending", authoritativeValue: 10, submittedValue: 12 },
+      { status: "success", authoritativeValue: 11, submittedValue: 12 },
+      { status: "success", authoritativeValue: 12, submittedValue: 12 },
+      {
+        status: "error",
+        authoritativeValue: 10,
+        submittedValue: 12,
+        code: "write_failed",
+        message: "Control update failed",
+      },
+    ];
+
+    expect(states.map(({ authoritativeValue }) => authoritativeValue)).toEqual([
+      10, 10, 11, 12, 10,
+    ]);
+    expect(JSON.stringify(states.at(-1))).not.toMatch(
+      /dev\/video|ioctl|Bearer|raw_exception/,
+    );
   });
 });

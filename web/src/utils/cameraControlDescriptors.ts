@@ -3,9 +3,11 @@ import type {
   CameraControlMenuItem,
   CameraControlValue,
   DescriptorControlState,
+  DescriptorEditorKind,
   DescriptorNormalizationReason,
   DescriptorNormalizationResult,
   DescriptorSafeMetadata,
+  DescriptorValidationResult,
 } from "@/types/cameraControls";
 
 const CONTROL_TYPE = {
@@ -57,6 +59,71 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function isSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value);
+}
+
+function validIntegerCandidate(
+  candidate: unknown,
+): DescriptorValidationResult | number {
+  if (typeof candidate !== "number") {
+    return { ok: false, code: "invalid_type" };
+  }
+  if (!Number.isFinite(candidate) || !Number.isInteger(candidate)) {
+    return { ok: false, code: "non_finite_integer" };
+  }
+  if (!Number.isSafeInteger(candidate)) {
+    return { ok: false, code: "unsafe_integer" };
+  }
+
+  return candidate;
+}
+
+function isValidationResult(
+  value: DescriptorValidationResult | number,
+): value is DescriptorValidationResult {
+  return typeof value !== "number";
+}
+
+function isOutsideBounds(
+  value: number,
+  minimum: number | null,
+  maximum: number | null,
+) {
+  return (
+    (minimum !== null && value < minimum) ||
+    (maximum !== null && value > maximum)
+  );
+}
+
+function parseBitmaskCandidate(
+  candidate: unknown,
+): DescriptorValidationResult | number {
+  if (typeof candidate === "number") {
+    if (!Number.isSafeInteger(candidate) || candidate < 0) {
+      return {
+        ok: false,
+        code:
+          Number.isInteger(candidate) && candidate >= 0
+            ? "unsafe_integer"
+            : "invalid_bitmask",
+      };
+    }
+
+    return candidate;
+  }
+
+  if (typeof candidate !== "string") {
+    return { ok: false, code: "invalid_type" };
+  }
+  if (!/^(?:[0-9]+|0[xX][0-9a-fA-F]+)$/.test(candidate)) {
+    return { ok: false, code: "invalid_bitmask" };
+  }
+
+  const value = BigInt(candidate);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return { ok: false, code: "unsafe_integer" };
+  }
+
+  return Number(value);
 }
 
 function isNullableSafeInteger(value: unknown): value is number | null {
@@ -445,4 +512,108 @@ export function normalizeCameraControlDescriptor(
       ),
     },
   };
+}
+
+export function getDescriptorEditorKind(
+  descriptor: CameraControlDescriptor,
+): DescriptorEditorKind {
+  switch (descriptor.control_type) {
+    case CONTROL_TYPE.boolean:
+      return "boolean";
+    case CONTROL_TYPE.integer:
+      return "integer";
+    case CONTROL_TYPE.menu:
+      return "menu";
+    case CONTROL_TYPE.integerMenu:
+      return "integer-menu";
+    case CONTROL_TYPE.button:
+      return "button";
+    case CONTROL_TYPE.string:
+      return "string";
+    case CONTROL_TYPE.bitmask:
+      return descriptor.menu_items.length > 0
+        ? "labeled-bitmask"
+        : "numeric-bitmask";
+    default:
+      return "unsupported";
+  }
+}
+
+export function validateDescriptorValue(
+  descriptor: CameraControlDescriptor,
+  candidate: unknown,
+): DescriptorValidationResult {
+  if (!descriptor.state.active || !descriptor.state.writable) {
+    return { ok: false, code: "control_not_editable" };
+  }
+
+  switch (descriptor.control_type) {
+    case CONTROL_TYPE.boolean:
+      return typeof candidate === "boolean"
+        ? { ok: true, value: candidate }
+        : { ok: false, code: "invalid_type" };
+    case CONTROL_TYPE.integer: {
+      const value = validIntegerCandidate(candidate);
+      if (isValidationResult(value)) {
+        return value;
+      }
+      if (isOutsideBounds(value, descriptor.minimum, descriptor.maximum)) {
+        return { ok: false, code: "out_of_range" };
+      }
+
+      const step =
+        descriptor.step !== null && descriptor.step > 0 ? descriptor.step : 1;
+      const minimum = descriptor.minimum ?? 0;
+      if ((BigInt(value) - BigInt(minimum)) % BigInt(step) !== 0n) {
+        return { ok: false, code: "step_mismatch" };
+      }
+
+      return { ok: true, value };
+    }
+    case CONTROL_TYPE.menu:
+    case CONTROL_TYPE.integerMenu: {
+      const value = validIntegerCandidate(candidate);
+      if (isValidationResult(value)) {
+        return value;
+      }
+
+      const found = descriptor.menu_items.some((item) =>
+        descriptor.control_type === CONTROL_TYPE.menu
+          ? item.index === value
+          : item.value === value,
+      );
+      return found
+        ? { ok: true, value }
+        : { ok: false, code: "menu_value_not_found" };
+    }
+    case CONTROL_TYPE.button:
+      return candidate === null
+        ? { ok: true, value: null }
+        : { ok: false, code: "invalid_type" };
+    case CONTROL_TYPE.string: {
+      if (typeof candidate !== "string") {
+        return { ok: false, code: "invalid_type" };
+      }
+
+      const length = Array.from(candidate).length;
+      if (isOutsideBounds(length, descriptor.minimum, descriptor.maximum)) {
+        return { ok: false, code: "invalid_string_length" };
+      }
+
+      return { ok: true, value: candidate };
+    }
+    case CONTROL_TYPE.bitmask: {
+      const value = parseBitmaskCandidate(candidate);
+      if (isValidationResult(value)) {
+        return value;
+      }
+      if (isOutsideBounds(value, descriptor.minimum, descriptor.maximum)) {
+        return { ok: false, code: "out_of_range" };
+      }
+
+      return { ok: true, value };
+    }
+    default:
+      return { ok: false, code: "unsupported_type" };
+  }
 }
