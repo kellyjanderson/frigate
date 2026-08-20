@@ -306,17 +306,19 @@ export function DescriptorValueEditor({
       case "menu":
       case "integer-menu": {
         const integerMenu = editorKind === "integer-menu";
+        const selectedIndex = selectedMenuIndex(
+          descriptor,
+          draft,
+          integerMenu,
+          draftIsAuthoritative,
+        );
+        const selectedLabel = descriptor.menu_items.find(
+          ({ index }) => String(index) === selectedIndex,
+        )?.label;
         return (
           <Select
             disabled={disabled}
-            value={
-              selectedMenuIndex(
-                descriptor,
-                draft,
-                integerMenu,
-                draftIsAuthoritative,
-              ) ?? ""
-            }
+            value={selectedIndex ?? ""}
             onValueChange={(selectedIndex) => {
               if (disabledRef.current) {
                 return;
@@ -337,7 +339,8 @@ export function DescriptorValueEditor({
             <SelectTrigger
               {...sharedAria}
               aria-invalid={validationCode !== null}
-              className="h-11 min-w-0 focus-visible:ring-primary [&>span]:line-clamp-none [&>span]:whitespace-normal [&>span]:break-words"
+              className="h-11 min-w-0 overflow-hidden focus-visible:ring-primary [&>span]:line-clamp-1 [&>span]:min-w-0"
+              title={selectedLabel}
             >
               <SelectValue />
             </SelectTrigger>

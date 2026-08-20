@@ -917,9 +917,6 @@ describe("DescriptorValueEditor", () => {
     ) as HTMLElement;
     expect(wrapper.className).toContain("max-w-full");
     expect(trigger.className).toContain("min-w-0");
-    expect(trigger.className).toContain("whitespace-normal");
-    expect(trigger.className).toContain("break-words");
-    expect(trigger.className).not.toContain("truncate");
     expect(trigger.className).toContain("focus-visible:ring-primary");
 
     const bitHarness = renderEditor(
@@ -1008,5 +1005,30 @@ describe("DescriptorValueEditor", () => {
       "button",
     ) as HTMLElement;
     expect(buttonTarget.className).toContain("focus-visible:ring-primary");
+  });
+
+  it("contains a long selected menu value within its fixed-height trigger", () => {
+    const longLabel =
+      "An unusually long normalized menu value that cannot fit on one line";
+    const harness = renderEditor(
+      descriptor({
+        control_type: 3,
+        current_value: 0,
+        menu_items: [{ index: 0, value: null, label: longLabel }],
+      }),
+    );
+    harness.container.style.width = "166px";
+    const trigger = harness.container.querySelector(
+      "[role=combobox]",
+    ) as HTMLElement;
+    const selectedValue = trigger.querySelector("span") as HTMLElement;
+
+    expect(trigger.className).toContain("h-11");
+    expect(trigger.className).toContain("overflow-hidden");
+    expect(trigger.className).toContain("[&>span]:min-w-0");
+    expect(trigger.className).toContain("[&>span]:line-clamp-1");
+    expect(trigger.className).not.toContain("line-clamp-none");
+    expect(selectedValue.textContent).toBe(longLabel);
+    expect(trigger.title).toBe(longLabel);
   });
 });
