@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import type {
   CameraControlDescriptor,
   CameraControlValue,
@@ -223,7 +224,11 @@ export function DescriptorValueEditor({
     <Input
       {...sharedAria}
       aria-invalid={validationCode !== null}
-      className="h-11 min-w-0"
+      className={cn(
+        "h-11 min-w-0 border-muted-foreground focus-visible:ring-primary",
+        validationCode !== null &&
+          "border-2 border-destructive ring-1 ring-destructive dark:border-destructive-foreground dark:ring-destructive-foreground",
+      )}
       disabled={disabled}
       inputMode={inputMode}
       value={draft === null ? "" : String(draft)}
@@ -244,7 +249,7 @@ export function DescriptorValueEditor({
           <Switch
             {...sharedAria}
             checked={draft === true}
-            className="min-h-11 min-w-11"
+            className="min-h-11 min-w-11 focus-visible:ring-primary"
             disabled={disabled}
             onCheckedChange={(checked) => {
               setDraft(checked);
@@ -274,7 +279,7 @@ export function DescriptorValueEditor({
             {hasPracticalSlider && (
               <Slider
                 {...sharedAria}
-                className="min-h-11 min-w-0 flex-1"
+                className="min-h-11 min-w-0 flex-1 [&_[role=slider]:focus-visible]:ring-primary"
                 disabled={disabled}
                 max={maximum as number}
                 min={minimum as number}
@@ -330,7 +335,7 @@ export function DescriptorValueEditor({
             <SelectTrigger
               {...sharedAria}
               aria-invalid={validationCode !== null}
-              className="h-11 min-w-0 [&>span]:line-clamp-none [&>span]:whitespace-normal [&>span]:break-words"
+              className="h-11 min-w-0 focus-visible:ring-primary [&>span]:line-clamp-none [&>span]:whitespace-normal [&>span]:break-words"
             >
               <SelectValue />
             </SelectTrigger>
@@ -352,7 +357,7 @@ export function DescriptorValueEditor({
         return (
           <Button
             {...sharedAria}
-            className="min-h-11 min-w-11 whitespace-normal"
+            className="min-h-11 min-w-11 whitespace-normal focus-visible:ring-primary"
             disabled={disabled}
             onClick={() => commitValidated(null, false, true)}
           >
@@ -382,7 +387,7 @@ export function DescriptorValueEditor({
                     aria-describedby={ariaDescribedBy}
                     aria-labelledby={`${ariaLabelledBy} ${bitLabelId}`}
                     checked={checked}
-                    className="size-11"
+                    className="size-11 focus-visible:ring-primary"
                     disabled={disabled}
                     onCheckedChange={(nextChecked) => {
                       if (disabledRef.current) {
