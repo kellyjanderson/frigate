@@ -318,7 +318,7 @@ export function DescriptorValueEditor({
                 ({ index }) => String(index) === selectedIndex,
               );
               if (item === undefined) {
-                commitValidated(Number.NaN);
+                reportValidation("menu_value_not_found");
                 return;
               }
               const value = integerMenu ? item.value : item.index;

@@ -25,6 +25,21 @@ beforeAll(() => {
     disconnect() {}
   }
   globalThis.ResizeObserver = ResizeObserverMock;
+  if (!("PointerEvent" in globalThis)) {
+    globalThis.PointerEvent = MouseEvent as typeof PointerEvent;
+  }
+  const capturedPointers = new WeakMap<Element, Set<number>>();
+  Element.prototype.setPointerCapture = function (pointerId: number) {
+    const pointers = capturedPointers.get(this) ?? new Set<number>();
+    pointers.add(pointerId);
+    capturedPointers.set(this, pointers);
+  };
+  Element.prototype.hasPointerCapture = function (pointerId: number) {
+    return capturedPointers.get(this)?.has(pointerId) ?? false;
+  };
+  Element.prototype.releasePointerCapture = function (pointerId: number) {
+    capturedPointers.get(this)?.delete(pointerId);
+  };
 });
 
 afterEach(() => {
@@ -142,6 +157,25 @@ function click(target: Element) {
   });
 }
 
+function pointer(
+  target: Element,
+  type: "pointerdown" | "pointerup",
+  x: number,
+) {
+  act(() => {
+    target.dispatchEvent(
+      new PointerEvent(type, {
+        bubbles: true,
+        button: 0,
+        buttons: type === "pointerdown" ? 1 : 0,
+        clientX: x,
+        pointerId: 1,
+        pointerType: "touch",
+      }),
+    );
+  });
+}
+
 describe("DescriptorValueEditor", () => {
   it("renders every supported editor kind with accessible, contained targets", () => {
     const fixtures: Array<{
@@ -241,6 +275,7 @@ describe("DescriptorValueEditor", () => {
         "control-description",
       );
       expect(target?.className).toMatch(/h-11|size-11/);
+      expect(target?.className).toMatch(/focus(?:-visible)?:/);
       act(() => harness.root.unmount());
       roots.splice(roots.indexOf(harness.root), 1);
       harness.container.remove();
@@ -322,6 +357,33 @@ describe("DescriptorValueEditor", () => {
     expect(thumb.closest(".touch-none")).not.toBeNull();
   });
 
+  it("commits a pointer or touch-equivalent slider change exactly once", () => {
+    const harness = renderEditor(
+      descriptor({ minimum: 0, maximum: 100, step: 1, current_value: 10 }),
+    );
+    const slider = harness.container.querySelector(
+      ".touch-none",
+    ) as HTMLElement;
+    slider.getBoundingClientRect = () =>
+      ({
+        bottom: 44,
+        height: 44,
+        left: 0,
+        right: 100,
+        top: 0,
+        width: 100,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+
+    pointer(slider, "pointerdown", 75);
+    pointer(slider, "pointerup", 75);
+
+    expect(harness.onCommit).toHaveBeenCalledTimes(1);
+    expect(harness.onCommit).toHaveBeenCalledWith("0x00980900", 75);
+  });
+
   it("commits boolean and action activation exactly once", () => {
     const boolean = descriptor({
       control_type: 2,
@@ -395,6 +457,39 @@ describe("DescriptorValueEditor", () => {
     click(fifty as Element);
     expect(harness.onCommit).toHaveBeenLastCalledWith("0x00980900", 5);
     expect(integerTrigger.textContent).toContain("50 Hz");
+  });
+
+  it("rejects a menu selection whose item became absent before activation", () => {
+    const menu = descriptor({
+      control_type: 3,
+      minimum: 0,
+      maximum: 4,
+      current_value: 0,
+      menu_items: [
+        { index: 0, value: null, label: "Auto" },
+        { index: 4, value: null, label: "Manual" },
+      ],
+    });
+    const harness = renderEditor(menu);
+    click(harness.container.querySelector("[role=combobox]") as Element);
+    const queuedManualSelection = Array.from(
+      document.querySelectorAll("[role=option]"),
+    ).find((option) => option.textContent === "Manual") as Element;
+
+    menu.menu_items.find = () => undefined;
+    click(queuedManualSelection);
+
+    expect(harness.onCommit).not.toHaveBeenCalled();
+    expect(harness.onValidationChange).toHaveBeenCalledTimes(1);
+    expect(harness.onValidationChange).toHaveBeenCalledWith(
+      "0x00980900",
+      "menu_value_not_found",
+    );
+    expect(
+      harness.container
+        .querySelector("[role=combobox]")
+        ?.getAttribute("aria-invalid"),
+    ).toBe("true");
   });
 
   it("preserves unknown labeled bits across sequential edits", () => {
@@ -506,6 +601,148 @@ describe("DescriptorValueEditor", () => {
     );
   });
 
+  it("resets drafts independently when editor kind changes", () => {
+    const harness = renderEditor(
+      descriptor({
+        control_type: 7,
+        minimum: 1,
+        maximum: 3,
+        current_value: "cam",
+        default_value: "cam",
+        element_size: 4,
+      }),
+    );
+    let input = harness.container.querySelector("input") as HTMLInputElement;
+    setInput(input, "four");
+    press(input, "Enter");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+
+    const integer = descriptor({
+      minimum: 0,
+      maximum: 20,
+      step: 2,
+      current_value: 12,
+    });
+    harness.rerender({ descriptor: integer, commitState: idle(12) });
+
+    input = harness.container.querySelector("input") as HTMLInputElement;
+    expect(input.inputMode).toBe("numeric");
+    expect(input.value).toBe("12");
+    expect(input.getAttribute("aria-invalid")).toBe("false");
+    expect(harness.onCommit).not.toHaveBeenCalled();
+    expect(harness.onValidationChange).toHaveBeenLastCalledWith(
+      "0x00980900",
+      null,
+    );
+  });
+
+  it("resets drafts independently when validation metadata changes", () => {
+    const harness = renderEditor(
+      descriptor({ minimum: 0, maximum: 20, step: 2, current_value: 10 }),
+    );
+    let input = harness.container.querySelector("input") as HTMLInputElement;
+    setInput(input, "11");
+    press(input, "Enter");
+
+    const changedValidation = descriptor({
+      minimum: 5,
+      maximum: 25,
+      step: 5,
+      current_value: 10,
+    });
+    harness.rerender({
+      descriptor: changedValidation,
+      commitState: idle(10),
+    });
+
+    input = harness.container.querySelector("input") as HTMLInputElement;
+    expect(input.value).toBe("10");
+    expect(input.getAttribute("aria-invalid")).toBe("false");
+    expect(harness.onCommit).not.toHaveBeenCalled();
+    expect(harness.onValidationChange).toHaveBeenLastCalledWith(
+      "0x00980900",
+      null,
+    );
+  });
+
+  it.each([
+    [
+      "string",
+      descriptor({
+        control_type: 7,
+        minimum: 1,
+        maximum: 10,
+        default_value: "camera",
+        current_value: "camera",
+        element_size: 11,
+      }),
+      "door",
+      "porch",
+      "camera",
+    ],
+    [
+      "numeric bitmask",
+      descriptor({
+        control_type: 8,
+        minimum: 0,
+        maximum: 255,
+        default_value: 5,
+        current_value: 5,
+      }),
+      "0x0f",
+      "31",
+      "5",
+    ],
+  ])(
+    "commits valid %s Enter and blur routes once and restores on Escape",
+    (_name, fixture, enterValue, blurValue, confirmedText) => {
+      const harness = renderEditor(fixture);
+      const input = harness.container.querySelector(
+        "input",
+      ) as HTMLInputElement;
+
+      setInput(input, enterValue);
+      press(input, "Enter");
+      blur(input);
+      expect(harness.onCommit).toHaveBeenCalledTimes(1);
+      expect(harness.onCommit).toHaveBeenLastCalledWith(
+        "0x00980900",
+        _name === "numeric bitmask" ? 15 : enterValue,
+      );
+
+      setInput(input, blurValue);
+      blur(input);
+      expect(harness.onCommit).toHaveBeenCalledTimes(2);
+      expect(harness.onCommit).toHaveBeenLastCalledWith(
+        "0x00980900",
+        _name === "numeric bitmask" ? 31 : blurValue,
+      );
+
+      setInput(input, "pending draft");
+      press(input, "Escape");
+      blur(input);
+      expect(input.value).toBe(confirmedText);
+      expect(harness.onCommit).toHaveBeenCalledTimes(2);
+      expect(harness.onValidationChange).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports out-of-range integer input without committing", () => {
+    const harness = renderEditor(
+      descriptor({ minimum: 10, maximum: 20, step: 2, current_value: 12 }),
+    );
+    const input = harness.container.querySelector("input") as HTMLInputElement;
+    setInput(input, "22");
+    blur(input);
+
+    expect(harness.onCommit).not.toHaveBeenCalled();
+    expect(harness.onValidationChange).toHaveBeenCalledTimes(1);
+    expect(harness.onValidationChange).toHaveBeenCalledWith(
+      "0x00980900",
+      "out_of_range",
+    );
+  });
+
   it.each([
     [
       "string",
@@ -561,5 +798,160 @@ describe("DescriptorValueEditor", () => {
     expect(input.disabled).toBe(true);
     press(input, "Enter");
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("disables interaction across every editor family", () => {
+    const disabledState = {
+      backendActive: true,
+      backendWritable: false,
+      backendReadSupported: true,
+      active: true,
+      writable: false,
+      readSupported: true,
+      disabled: false,
+      inactive: false,
+      readOnly: true,
+      grabbed: false,
+    };
+    const fixtures = [
+      descriptor({
+        control_type: 2,
+        minimum: 0,
+        maximum: 1,
+        current_value: false,
+        state: disabledState,
+      }),
+      descriptor({ state: disabledState }),
+      descriptor({
+        control_type: 3,
+        current_value: 0,
+        menu_items: [{ index: 0, value: null, label: "Auto" }],
+        state: disabledState,
+      }),
+      descriptor({
+        control_type: 9,
+        current_value: 60,
+        menu_items: [{ index: 5, value: 60, label: "60 Hz" }],
+        state: disabledState,
+      }),
+      descriptor({
+        control_type: 4,
+        minimum: null,
+        maximum: null,
+        step: null,
+        current_value: null,
+        state: disabledState,
+      }),
+      descriptor({
+        control_type: 7,
+        current_value: "camera",
+        element_size: 16,
+        state: disabledState,
+      }),
+      descriptor({
+        control_type: 8,
+        current_value: 1,
+        menu_items: [{ index: 0, value: 1, label: "First" }],
+        state: disabledState,
+      }),
+      descriptor({
+        control_type: 8,
+        current_value: 1,
+        state: disabledState,
+      }),
+    ];
+
+    for (const fixture of fixtures) {
+      const harness = renderEditor(fixture);
+      const targets = harness.container.querySelectorAll(
+        "input, button, [role=slider]",
+      );
+      expect(targets.length).toBeGreaterThan(0);
+      for (const target of targets) {
+        expect(
+          (target as HTMLInputElement | HTMLButtonElement).disabled ||
+            target.hasAttribute("data-disabled"),
+        ).toBe(true);
+        click(target);
+        press(target, "Enter");
+      }
+      expect(harness.onCommit).not.toHaveBeenCalled();
+      act(() => harness.root.unmount());
+      roots.splice(roots.indexOf(harness.root), 1);
+      harness.container.remove();
+    }
+  });
+
+  it("ignores events queued before a pending disable rerender", () => {
+    const harness = renderEditor(descriptor({ current_value: 10 }));
+    const input = harness.container.querySelector("input") as HTMLInputElement;
+    setInput(input, "20");
+    harness.rerender({
+      commitState: {
+        status: "pending",
+        authoritativeValue: 10,
+        submittedValue: 20,
+      },
+    });
+    press(input, "Enter");
+    blur(input);
+
+    expect(harness.onCommit).not.toHaveBeenCalled();
+    expect(harness.onValidationChange).not.toHaveBeenCalled();
+  });
+
+  it("preserves focus-visible and narrow-width containment hooks", () => {
+    const longLabel =
+      "An unusually long menu label that must wrap inside a narrow editor slot";
+    const menuHarness = renderEditor(
+      descriptor({
+        control_type: 3,
+        current_value: 0,
+        menu_items: [{ index: 0, value: null, label: longLabel }],
+      }),
+    );
+    menuHarness.container.style.width = "160px";
+    const wrapper = menuHarness.container.firstElementChild as HTMLElement;
+    const trigger = menuHarness.container.querySelector(
+      "[role=combobox]",
+    ) as HTMLElement;
+    expect(wrapper.className).toContain("max-w-full");
+    expect(trigger.className).toContain("min-w-0");
+    expect(trigger.className).toContain("whitespace-normal");
+    expect(trigger.className).toContain("break-words");
+    expect(trigger.className).not.toContain("truncate");
+    expect(trigger.className).toContain("focus:");
+
+    const bitHarness = renderEditor(
+      descriptor({
+        control_type: 8,
+        current_value: 1,
+        menu_items: [{ index: 0, value: 1, label: longLabel }],
+      }),
+    );
+    bitHarness.container.style.width = "160px";
+    const group = bitHarness.container.querySelector(
+      "[role=group]",
+    ) as HTMLElement;
+    const checkbox = bitHarness.container.querySelector(
+      "[role=checkbox]",
+    ) as HTMLElement;
+    const label = group.querySelector("label") as HTMLElement;
+    const labelText = group.querySelector("span[id]") as HTMLElement;
+    expect(group.className).toContain("flex-wrap");
+    expect(label.className).toContain("min-w-0");
+    expect(label.className).toContain("whitespace-normal");
+    expect(labelText.className).toContain("break-words");
+    expect(checkbox.className).toContain("focus-visible:");
+
+    const integerHarness = renderEditor(descriptor());
+    const exact = integerHarness.container.querySelector(
+      "input",
+    ) as HTMLElement;
+    const slider = integerHarness.container.querySelector(
+      "[role=slider]",
+    ) as HTMLElement;
+    expect(exact.className).toContain("focus-visible:");
+    expect(slider.className).toContain("focus-visible:");
   });
 });
