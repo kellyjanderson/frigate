@@ -275,11 +275,11 @@ export function DescriptorValueEditor({
           intervalCount <= 1000;
 
         return (
-          <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+          <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
             {hasPracticalSlider && (
               <Slider
                 {...sharedAria}
-                className="min-h-11 min-w-0 flex-1 [&_[role=slider]:focus-visible]:ring-primary"
+                className="min-h-11 min-w-11 flex-1 [&_[role=slider]:focus-visible]:ring-primary"
                 disabled={disabled}
                 max={maximum as number}
                 min={minimum as number}
@@ -297,7 +297,9 @@ export function DescriptorValueEditor({
                 onValueCommit={([value]) => commitValidated(value, true)}
               />
             )}
-            <div className="min-w-0 sm:w-32">{exactInput("numeric")}</div>
+            <div className="min-w-11 sm:w-32 sm:flex-none">
+              {exactInput("numeric")}
+            </div>
           </div>
         );
       }

@@ -900,7 +900,7 @@ describe("DescriptorValueEditor", () => {
     expect(harness.onValidationChange).not.toHaveBeenCalled();
   });
 
-  it("preserves focus-visible and narrow-width containment hooks", () => {
+  it("preserves primary focus, state contrast, and narrow-slot hooks", () => {
     const longLabel =
       "An unusually long menu label that must wrap inside a narrow editor slot";
     const menuHarness = renderEditor(
@@ -920,7 +920,7 @@ describe("DescriptorValueEditor", () => {
     expect(trigger.className).toContain("whitespace-normal");
     expect(trigger.className).toContain("break-words");
     expect(trigger.className).not.toContain("truncate");
-    expect(trigger.className).toContain("focus:");
+    expect(trigger.className).toContain("focus-visible:ring-primary");
 
     const bitHarness = renderEditor(
       descriptor({
@@ -942,16 +942,71 @@ describe("DescriptorValueEditor", () => {
     expect(label.className).toContain("min-w-0");
     expect(label.className).toContain("whitespace-normal");
     expect(labelText.className).toContain("break-words");
-    expect(checkbox.className).toContain("focus-visible:");
+    expect(checkbox.className).toContain("focus-visible:ring-primary");
 
     const integerHarness = renderEditor(descriptor());
+    integerHarness.container.style.width = "160px";
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1024,
+    });
+    const integerLayout = integerHarness.container.firstElementChild
+      ?.firstElementChild as HTMLElement;
+    const sliderRoot = integerHarness.container.querySelector(
+      ".touch-none",
+    ) as HTMLElement;
+    const exactWrapper = integerHarness.container.querySelector("input")
+      ?.parentElement as HTMLElement;
     const exact = integerHarness.container.querySelector(
       "input",
     ) as HTMLElement;
-    const slider = integerHarness.container.querySelector(
-      "[role=slider]",
+    expect(integerLayout.className).toContain("sm:flex-row");
+    expect(integerLayout.className).toContain("sm:flex-wrap");
+    expect(sliderRoot.className).toContain("min-w-11");
+    expect(exactWrapper.className).toContain("min-w-11");
+    expect(exactWrapper.className).toContain("sm:flex-none");
+    expect(exact.className).toContain("focus-visible:ring-primary");
+    expect(exact.className).toContain("border-muted-foreground");
+    expect(exact.className).not.toContain("border-destructive");
+    expect(sliderRoot.className).toContain(
+      "[&_[role=slider]:focus-visible]:ring-primary",
+    );
+
+    setInput(exact as HTMLInputElement, "101");
+    press(exact, "Enter");
+    expect(exact.getAttribute("aria-invalid")).toBe("true");
+    expect(exact.className).toContain("border-2");
+    expect(exact.className).toContain("border-destructive");
+    expect(exact.className).toContain("ring-destructive");
+    expect(exact.className).toContain("dark:border-destructive-foreground");
+
+    const switchHarness = renderEditor(
+      descriptor({
+        control_type: 2,
+        minimum: 0,
+        maximum: 1,
+        default_value: false,
+        current_value: true,
+      }),
+    );
+    const switchTarget = switchHarness.container.querySelector(
+      "[role=switch]",
     ) as HTMLElement;
-    expect(exact.className).toContain("focus-visible:");
-    expect(slider.className).toContain("focus-visible:");
+    expect(switchTarget.className).toContain("focus-visible:ring-primary");
+
+    const buttonHarness = renderEditor(
+      descriptor({
+        control_type: 4,
+        minimum: null,
+        maximum: null,
+        step: null,
+        default_value: null,
+        current_value: null,
+      }),
+    );
+    const buttonTarget = buttonHarness.container.querySelector(
+      "button",
+    ) as HTMLElement;
+    expect(buttonTarget.className).toContain("focus-visible:ring-primary");
   });
 });
