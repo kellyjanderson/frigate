@@ -12,12 +12,14 @@ import useKeyboardListener from "@/hooks/use-keyboard-listener";
 
 type GenericVideoPlayerProps = {
   source: string;
+  startPosition?: number;
   onPlaying?: () => void;
   children?: React.ReactNode;
 };
 
 export function GenericVideoPlayer({
   source,
+  startPosition,
   onPlaying,
   children,
 }: GenericVideoPlayerProps) {
@@ -100,8 +102,9 @@ export function GenericVideoPlayer({
   const hlsSource = useMemo(() => {
     return {
       playlist: source,
+      startPosition,
     };
-  }, [source]);
+  }, [source, startPosition]);
 
   return (
     <div ref={containerRef} className="relative flex h-full w-full flex-col">

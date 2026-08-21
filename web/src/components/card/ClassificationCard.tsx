@@ -6,13 +6,14 @@ import {
   ClassificationThreshold,
   ClassifiedEvent,
 } from "@/types/classification";
+import { Event } from "@/types/event";
 import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 import { isDesktop, isIOS, isMobile, isMobileOnly } from "react-device-detect";
 import { useTranslation } from "react-i18next";
 import TimeAgo from "../dynamic/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import { LuSearch, LuInfo } from "react-icons/lu";
+import { LuFolderX, LuInfo, LuSearch } from "react-icons/lu";
 import { TooltipPortal } from "@radix-ui/react-tooltip";
 import { useNavigate } from "react-router-dom";
 import { HiSquare2Stack } from "react-icons/hi2";
@@ -33,6 +34,10 @@ import {
   MobilePageTitle,
   MobilePageTrigger,
 } from "../mobile/MobilePage";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import ImageLoadingIndicator from "../indicators/ImageLoadingIndicator";
+import { GenericVideoPlayer } from "../player/GenericVideoPlayer";
+import { REVIEW_PADDING } from "@/types/review";
 
 type ClassificationCardProps = {
   className?: string;
@@ -194,6 +199,15 @@ export const ClassificationCard = forwardRef<
 type GroupedClassificationCardProps = {
   group: ClassificationItemData[];
   classifiedEvent?: ClassifiedEvent;
+  event?: Event;
+  detectionMediaLabels?: {
+    tabsLabel: string;
+    faces: string;
+    fullFrame: string;
+    playback: string;
+    fullFrameAlt: string;
+    fullFrameUnavailable: string;
+  };
   threshold?: ClassificationThreshold;
   selectedItems: string[];
   i18nLibrary: string;
@@ -205,6 +219,8 @@ type GroupedClassificationCardProps = {
 export function GroupedClassificationCard({
   group,
   classifiedEvent,
+  event,
+  detectionMediaLabels,
   threshold,
   selectedItems,
   i18nLibrary,
@@ -305,6 +321,12 @@ export function GroupedClassificationCard({
     ? DialogDescription
     : MobilePageDescription;
 
+  const detectionTimestamp = bestItem.timestamp;
+  const showDetectionMedia =
+    event != undefined &&
+    detectionTimestamp != null &&
+    detectionMediaLabels != undefined;
+
   return (
     <>
       <ClassificationCard
@@ -334,10 +356,9 @@ export function GroupedClassificationCard({
         <Content
           className={cn(
             "scrollbar-container",
-            isDesktop && "min-w-[50%] max-w-[65%]",
+            isDesktop && "max-h-[90dvh] w-[85vw] max-w-[85vw] overflow-y-auto",
             isMobile && "overflow-y-auto",
           )}
-          onOpenAutoFocus={(e) => e.preventDefault()}
         >
           <>
             <Header
@@ -371,12 +392,13 @@ export function GroupedClassificationCard({
                         <Popover>
                           <PopoverTrigger asChild>
                             <button
-                              className="focus:outline-none"
+                              type="button"
+                              className="flex size-10 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                               aria-label={t("details.scoreInfo", {
                                 ns: i18nLibrary,
                               })}
                             >
-                              <LuInfo className="size-3" />
+                              <LuInfo className="size-4" />
                             </button>
                           </PopoverTrigger>
                           <PopoverContent className="w-80 text-sm">
@@ -406,15 +428,18 @@ export function GroupedClassificationCard({
                 >
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <div
-                        className="cursor-pointer"
-                        tabIndex={-1}
+                      <button
+                        type="button"
+                        className="flex size-12 items-center justify-center rounded-md text-secondary-foreground hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        aria-label={t("details.item.button.viewInExplore", {
+                          ns: "views/explore",
+                        })}
                         onClick={() => {
                           navigate(`/explore?event_id=${classifiedEvent.id}`);
                         }}
                       >
-                        <LuSearch className="size-4 text-secondary-foreground" />
-                      </div>
+                        <LuSearch className="size-5" />
+                      </button>
                     </TooltipTrigger>
                     <TooltipPortal>
                       <TooltipContent>
@@ -427,31 +452,137 @@ export function GroupedClassificationCard({
                 </div>
               )}
             </Header>
-            <div
-              className={cn(
-                "grid w-full auto-rows-min grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-6 2xl:grid-cols-8",
-                isDesktop && "p-2",
-                isMobile && "px-4 pb-4",
+            <Tabs defaultValue="faces" className="min-h-0 w-full">
+              {showDetectionMedia && (
+                <TabsList
+                  className="mx-2 grid h-12 w-[calc(100%-1rem)] grid-cols-3"
+                  aria-label={detectionMediaLabels.tabsLabel}
+                >
+                  <TabsTrigger className="h-10" value="faces">
+                    {detectionMediaLabels.faces}
+                  </TabsTrigger>
+                  <TabsTrigger className="h-10" value="fullFrame">
+                    {detectionMediaLabels.fullFrame}
+                  </TabsTrigger>
+                  <TabsTrigger className="h-10" value="playback">
+                    {detectionMediaLabels.playback}
+                  </TabsTrigger>
+                </TabsList>
               )}
-            >
-              {group.map((data: ClassificationItemData) => (
-                <div key={data.filename} className="aspect-square w-full">
-                  <ClassificationCard
-                    data={data}
-                    threshold={threshold}
-                    selected={false}
-                    clickable={false}
-                    i18nLibrary={i18nLibrary}
-                    onClick={() => {}}
-                  >
-                    {children?.(data)}
-                  </ClassificationCard>
+              <TabsContent value="faces">
+                <div
+                  className={cn(
+                    "grid w-full auto-rows-min grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3",
+                    isDesktop && "p-2",
+                    isMobile && "px-4 pb-4",
+                  )}
+                >
+                  {group.map((data: ClassificationItemData) => (
+                    <div key={data.filename} className="aspect-square w-full">
+                      <ClassificationCard
+                        data={data}
+                        threshold={threshold}
+                        selected={false}
+                        clickable={false}
+                        i18nLibrary={i18nLibrary}
+                        onClick={() => {}}
+                      >
+                        {children?.(data)}
+                      </ClassificationCard>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </TabsContent>
+              {showDetectionMedia && (
+                <>
+                  <TabsContent value="fullFrame" className="px-2 pb-2">
+                    <DetectionFullFrame
+                      camera={event.camera}
+                      timestamp={detectionTimestamp}
+                      alt={detectionMediaLabels.fullFrameAlt}
+                      unavailableLabel={
+                        detectionMediaLabels.fullFrameUnavailable
+                      }
+                    />
+                  </TabsContent>
+                  <TabsContent
+                    value="playback"
+                    className="aspect-video min-h-64 px-2 pb-2"
+                  >
+                    <DetectionPlayback
+                      event={event}
+                      timestamp={detectionTimestamp}
+                    />
+                  </TabsContent>
+                </>
+              )}
+            </Tabs>
           </>
         </Content>
       </Overlay>
     </>
+  );
+}
+
+type DetectionFullFrameProps = {
+  camera: string;
+  timestamp: number;
+  alt: string;
+  unavailableLabel: string;
+};
+
+function DetectionFullFrame({
+  camera,
+  timestamp,
+  alt,
+  unavailableLabel,
+}: DetectionFullFrameProps) {
+  const [loaded, setLoaded] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  return (
+    <div className="relative flex min-h-64 w-full items-center justify-center overflow-hidden rounded-lg bg-background_alt">
+      {!hasError && (
+        <ImageLoadingIndicator
+          className="absolute inset-0"
+          imgLoaded={loaded}
+        />
+      )}
+      {hasError ? (
+        <div className="flex flex-col items-center justify-center gap-2 p-8 text-center text-muted-foreground">
+          <LuFolderX className="size-12" aria-hidden="true" />
+          <span>{unavailableLabel}</span>
+        </div>
+      ) : (
+        <img
+          className={cn(
+            "max-h-[65dvh] max-w-full object-contain",
+            loaded ? "visible" : "invisible",
+          )}
+          src={`${baseUrl}api/${camera}/recordings/${timestamp}/snapshot.jpg`}
+          alt={alt}
+          onLoad={() => setLoaded(true)}
+          onError={() => setHasError(true)}
+        />
+      )}
+    </div>
+  );
+}
+
+type DetectionPlaybackProps = {
+  event: Event;
+  timestamp: number;
+};
+
+function DetectionPlayback({ event, timestamp }: DetectionPlaybackProps) {
+  const startTime = Math.max(0, timestamp - REVIEW_PADDING);
+  const endTime = Math.max(
+    timestamp + REVIEW_PADDING,
+    (event.end_time ?? timestamp) + REVIEW_PADDING,
+  );
+  const source = `${baseUrl}vod/${event.camera}/start/${startTime}/end/${endTime}/index.m3u8`;
+
+  return (
+    <GenericVideoPlayer source={source} startPosition={timestamp - startTime} />
   );
 }

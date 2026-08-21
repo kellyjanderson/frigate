@@ -17,8 +17,37 @@ import {
   expectBodyInteractive,
   waitForBodyInteractive,
 } from "../helpers/overlay-interaction";
+import { REVIEW_PADDING } from "../../src/types/review";
 
 const GROUPED_EVENT_ID = "1775487131.3863528-abc123";
+const GROUPED_EVENT = {
+  id: GROUPED_EVENT_ID,
+  label: "person",
+  sub_label: null,
+  camera: "front_door",
+  start_time: 1775487131.3863528,
+  end_time: 1775487161.3863528,
+  false_positive: false,
+  zones: ["front_yard"],
+  thumbnail: null,
+  has_clip: true,
+  has_snapshot: true,
+  retain_indefinitely: false,
+  plus_id: null,
+  model_hash: "abc123",
+  detector_type: "cpu",
+  model_type: "ssd",
+  data: {
+    top_score: 0.92,
+    score: 0.92,
+    region: [0.1, 0.1, 0.5, 0.8],
+    box: [0.2, 0.15, 0.45, 0.75],
+    area: 0.18,
+    ratio: 0.6,
+    type: "object",
+    path_data: [],
+  },
+};
 
 function groupedFacesMock() {
   return withGroupedTrainingAttempt(basicFacesMock(), {
@@ -32,41 +61,15 @@ function groupedFacesMock() {
 
 async function installGroupedFaces(app: FrigateApp) {
   await app.api.install({
-    events: [
-      {
-        id: GROUPED_EVENT_ID,
-        label: "person",
-        sub_label: null,
-        camera: "front_door",
-        start_time: 1775487131.3863528,
-        end_time: 1775487161.3863528,
-        false_positive: false,
-        zones: ["front_yard"],
-        thumbnail: null,
-        has_clip: true,
-        has_snapshot: true,
-        retain_indefinitely: false,
-        plus_id: null,
-        model_hash: "abc123",
-        detector_type: "cpu",
-        model_type: "ssd",
-        data: {
-          top_score: 0.92,
-          score: 0.92,
-          region: [0.1, 0.1, 0.5, 0.8],
-          box: [0.2, 0.15, 0.45, 0.75],
-          area: 0.18,
-          ratio: 0.6,
-          type: "object",
-          path_data: [],
-        },
-      },
-    ],
+    events: [GROUPED_EVENT],
     faces: groupedFacesMock(),
   });
+  await app.page.route("**/api/event_ids*", (route) =>
+    route.fulfill({ json: [GROUPED_EVENT] }),
+  );
 }
 
-async function openGroupedFaceDialog(app: FrigateApp): Promise<Locator> {
+async function openGroupedFaceDialog(app: FrigateApp) {
   await installGroupedFaces(app);
   await app.goto("/faces");
   const groupedImage = app.page
@@ -74,15 +77,80 @@ async function openGroupedFaceDialog(app: FrigateApp): Promise<Locator> {
     .first();
   const groupedCard = groupedImage.locator("xpath=..");
   await expect(groupedImage).toBeVisible({ timeout: 5_000 });
+  const listThumbnailBox = await groupedImage.boundingBox();
+  expect(listThumbnailBox).not.toBeNull();
   await groupedCard.click();
-  const dialog = app.page
-    .getByRole("dialog")
-    .filter({ has: app.page.locator('img[src*="clips/faces/train/"]') })
-    .first();
-  await expect(dialog).toBeVisible({ timeout: 5_000 });
-  await expect(dialog.locator('img[src*="clips/faces/train/"]')).toHaveCount(2);
-  return dialog;
+  const detail = app.isMobile
+    ? app.page
+        .locator("div.fixed.inset-0.z-50")
+        .filter({ has: app.page.locator('img[src*="clips/faces/train/"]') })
+        .first()
+    : app.page
+        .getByRole("dialog")
+        .filter({ has: app.page.locator('img[src*="clips/faces/train/"]') })
+        .first();
+  await expect(detail).toBeVisible({ timeout: 5_000 });
+  await expect(detail.locator('img[src*="clips/faces/train/"]')).toHaveCount(2);
+  return { detail, listThumbnailBox: listThumbnailBox! };
 }
+
+test.describe("Face Library — recognition media detail @high", () => {
+  test("unknown recognition opens full frame and playback at detection time", async ({
+    frigateApp,
+  }) => {
+    const detectionTimestamp = 1775487131.3863528;
+    let requestedPlaylist: string | undefined;
+
+    await frigateApp.page.route(/\/recordings\/.*\/snapshot\.jpg/, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"/>',
+      }),
+    );
+    await frigateApp.page.route(/\/vod\/.*\/index\.m3u8/, (route) => {
+      requestedPlaylist = route.request().url();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/vnd.apple.mpegurl",
+        body: "#EXTM3U\n#EXT-X-ENDLIST\n",
+      });
+    });
+
+    const { detail, listThumbnailBox } =
+      await openGroupedFaceDialog(frigateApp);
+    const detailFaceBox = await detail
+      .locator('img[src*="clips/faces/train/"]')
+      .first()
+      .boundingBox();
+    expect(detailFaceBox).not.toBeNull();
+    expect(detailFaceBox!.width).toBeGreaterThan(listThumbnailBox.width);
+    expect(detailFaceBox!.height).toBeGreaterThan(listThumbnailBox.height);
+    const tabs = frigateApp.page.getByRole("tablist", {
+      name: "Face detection details",
+    });
+    await expect(tabs.getByRole("tab")).toHaveCount(3);
+
+    await tabs.getByRole("tab", { name: "Full frame" }).click();
+    const fullFrame = frigateApp.page.getByRole("img", {
+      name: /Full camera frame for the face detection/,
+    });
+    await expect(fullFrame).toBeVisible();
+    await expect(fullFrame).toHaveAttribute(
+      "src",
+      new RegExp(
+        `/api/front_door/recordings/${detectionTimestamp}/snapshot\\.jpg$`,
+      ),
+    );
+
+    await tabs.getByRole("tab", { name: "Playback" }).click();
+    await expect
+      .poll(() => requestedPlaylist)
+      .toContain(
+        `/vod/front_door/start/${detectionTimestamp - REVIEW_PADDING}/end/${GROUPED_EVENT.end_time + REVIEW_PADDING}/index.m3u8`,
+      );
+  });
+});
 
 /**
  * Opens the LibrarySelector dropdown (the single button at the top-left of
@@ -295,7 +363,7 @@ test.describe("FaceSelectionDialog @high", () => {
     frigateApp,
   }) => {
     // Migrated from radix-overlay-regressions.spec.ts.
-    const dialog = await openGroupedFaceDialog(frigateApp);
+    const { detail: dialog } = await openGroupedFaceDialog(frigateApp);
     const triggers = dialog.locator('[aria-haspopup="menu"]');
     await expect(triggers).toHaveCount(2);
 
@@ -325,7 +393,7 @@ test.describe("FaceSelectionDialog @high", () => {
     frigateApp,
   }) => {
     // Migrated from radix-overlay-regressions.spec.ts.
-    const dialog = await openGroupedFaceDialog(frigateApp);
+    const { detail: dialog } = await openGroupedFaceDialog(frigateApp);
     const triggers = dialog.locator('[aria-haspopup="menu"]');
     await expect(triggers).toHaveCount(2);
 

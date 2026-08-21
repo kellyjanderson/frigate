@@ -8,7 +8,15 @@
   "details": {
     "timestamp": "Timestamp",
     "unknown": "Unknown",
-    "scoreInfo": "Score is a weighted average of all face scores, weighted by the size of the face in each image."
+    "scoreInfo": "Score is a weighted average of all face scores, weighted by the size of the face in each image.",
+    "mediaTabsLabel": "Face detection details",
+    "fullFrameAlt": "Full camera frame for the face detection on {{camera}}",
+    "fullFrameUnavailable": "The full frame is not available for this detection.",
+    "tabs": {
+      "faces": "Face crops",
+      "fullFrame": "Full frame",
+      "playback": "Playback"
+    }
   },
   "documentTitle": "Face Library - Frigate",
   "uploadFaceImage": {

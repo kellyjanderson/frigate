@@ -998,6 +998,17 @@ function FaceAttemptGroup({
     <GroupedClassificationCard
       group={group}
       classifiedEvent={classifiedEvent}
+      event={event}
+      detectionMediaLabels={{
+        tabsLabel: t("details.mediaTabsLabel"),
+        faces: t("details.tabs.faces"),
+        fullFrame: t("details.tabs.fullFrame"),
+        playback: t("details.tabs.playback"),
+        fullFrameAlt: t("details.fullFrameAlt", {
+          camera: event?.camera ?? "",
+        }),
+        fullFrameUnavailable: t("details.fullFrameUnavailable"),
+      }}
       threshold={threshold}
       selectedItems={selectedFaces}
       i18nLibrary="views/faceLibrary"
