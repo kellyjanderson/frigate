@@ -55,6 +55,13 @@
     "desc_one": "Are you sure you want to delete {{count}} face? This action cannot be undone.",
     "desc_other": "Are you sure you want to delete {{count}} faces? This action cannot be undone."
   },
+  "notFace": {
+    "action": "That's not a face",
+    "title": "Remove this face crop?",
+    "description": "This removes only this face crop. The event and recording will remain.",
+    "confirm": "Remove crop",
+    "pending": "Removing crop…"
+  },
   "renameFace": {
     "title": "Rename Face",
     "desc": "Enter a new name for {{name}}"

@@ -191,52 +191,54 @@ export default function FaceLibrary() {
   } | null>(null);
 
   const onDelete = useCallback(
-    (name: string, ids: string[], isName: boolean = false) => {
-      axios
-        .post(`/faces/${name}/delete`, { ids })
-        .then((resp) => {
-          setSelectedFaces([]);
+    async (
+      name: string,
+      ids: string[],
+      isName: boolean = false,
+    ): Promise<boolean> => {
+      try {
+        const resp = await axios.post(`/faces/${name}/delete`, { ids });
 
-          if (resp.status == 200) {
-            if (isName) {
-              toast.success(
-                t("toast.success.deletedName", { count: ids.length }),
-                {
-                  position: "top-center",
-                },
-              );
-            } else {
-              toast.success(
-                t("toast.success.deletedFace", { count: ids.length }),
-                {
-                  position: "top-center",
-                },
-              );
-            }
+        if (resp.status != 200) {
+          return false;
+        }
 
-            if (faceImages.length == 1) {
-              // face has been deleted
-              setPageToggle("train");
-            }
+        setSelectedFaces([]);
 
-            refreshFaces();
-          }
-        })
-        .catch((error) => {
-          const errorMessage =
-            error.response?.data?.message ||
-            error.response?.data?.detail ||
-            "Unknown error";
-          if (isName) {
-            toast.error(t("toast.error.deleteNameFailed", { errorMessage }), {
-              position: "top-center",
-            });
-          } else {
-            toast.error(t("toast.error.deleteFaceFailed", { errorMessage }), {
-              position: "top-center",
-            });
-          }
-        });
+        if (isName) {
+          toast.success(t("toast.success.deletedName", { count: ids.length }), {
+            position: "top-center",
+          });
+        } else {
+          toast.success(t("toast.success.deletedFace", { count: ids.length }), {
+            position: "top-center",
+          });
+        }
+
+        if (faceImages.length == 1) {
+          // face has been deleted
+          setPageToggle("train");
+        }
+
+        await refreshFaces();
+        return true;
+      } catch (error) {
+        const errorMessage =
+          axios.isAxiosError(error) &&
+          (error.response?.data?.message || error.response?.data?.detail)
+            ? error.response.data.message || error.response.data.detail
+            : "Unknown error";
+        if (isName) {
+          toast.error(t("toast.error.deleteNameFailed", { errorMessage }), {
+            position: "top-center",
+          });
+        } else {
+          toast.error(t("toast.error.deleteFaceFailed", { errorMessage }), {
+            position: "top-center",
+          });
+        }
+        return false;
+      }
     },
     [faceImages, refreshFaces, setPageToggle, t],
   );
@@ -476,6 +478,7 @@ export default function FaceLibrary() {
             selectedFaces={selectedFaces}
             isLoading={faceData === undefined}
             onClickFaces={onClickFaces}
+            onDelete={onDelete}
             onAddFace={() => setAddFace(true)}
             onRefresh={refreshFaces}
           />
@@ -502,7 +505,7 @@ type LibrarySelectorProps = {
   faces: string[];
   trainImages: string[];
   setPageToggle: (toggle: string) => void;
-  onDelete: (name: string, ids: string[], isName: boolean) => void;
+  onDelete: (name: string, ids: string[], isName: boolean) => Promise<boolean>;
   onRename: (old_name: string, new_name: string) => void;
 };
 function LibrarySelector({
@@ -523,7 +526,7 @@ function LibrarySelector({
       // Get all image IDs for this face
       const imageIds = faceData?.[faceName] || [];
 
-      onDelete(faceName, imageIds, true);
+      void onDelete(faceName, imageIds, true);
       setPageToggle("train");
     },
     [faceData, onDelete, setPageToggle],
@@ -598,7 +601,10 @@ function LibrarySelector({
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button className="flex justify-between smart-capitalize">
+          <Button
+            id="face-library-selector"
+            className="flex justify-between smart-capitalize"
+          >
             {pageTitle}
             <span className="ml-2 text-primary-variant">
               ({(pageToggle && faceData?.[pageToggle]?.length) || 0})
@@ -695,6 +701,7 @@ type TrainingGridProps = {
   selectedFaces: string[];
   isLoading: boolean;
   onClickFaces: (images: string[], ctrl: boolean) => void;
+  onDelete: (name: string, ids: string[]) => Promise<boolean>;
   onAddFace: () => void;
   onRefresh: (
     data?:
@@ -714,6 +721,7 @@ function TrainingGrid({
   selectedFaces,
   isLoading,
   onClickFaces,
+  onDelete,
   onAddFace,
   onRefresh,
 }: TrainingGridProps) {
@@ -813,6 +821,7 @@ function TrainingGrid({
               faceNames={faceNames}
               selectedFaces={selectedFaces}
               onClickFaces={onClickFaces}
+              onDelete={onDelete}
               onRefresh={onRefresh}
             />
           </div>
@@ -829,6 +838,7 @@ type FaceAttemptGroupProps = {
   faceNames: string[];
   selectedFaces: string[];
   onClickFaces: (image: string[], ctrl: boolean) => void;
+  onDelete: (name: string, ids: string[]) => Promise<boolean>;
   onRefresh: (
     data?:
       | FaceLibraryData
@@ -846,9 +856,14 @@ function FaceAttemptGroup({
   faceNames,
   selectedFaces,
   onClickFaces,
+  onDelete,
   onRefresh,
 }: FaceAttemptGroupProps) {
   const { t } = useTranslation(["views/faceLibrary", "views/explore"]);
+  const [rejectAttempt, setRejectAttempt] = useState<string | null>(null);
+  const [rejectPending, setRejectPending] = useState(false);
+  const rejectPendingRef = useRef(false);
+  const rejectedAttemptForFocusRef = useRef<string | null>(null);
 
   // data
 
@@ -982,6 +997,44 @@ function FaceAttemptGroup({
     [onRefresh, t],
   );
 
+  const focusAfterRejection = useCallback((rejectedFilename: string) => {
+    const nextAttemptAction = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        "[data-face-rejection-action]",
+      ),
+    ).find((button) => button.dataset.faceRejectionAction !== rejectedFilename);
+
+    (
+      nextAttemptAction ??
+      document.querySelector<HTMLElement>("#face-library-selector")
+    )?.focus();
+  }, []);
+
+  const onRejectAttempt = useCallback(async () => {
+    if (!rejectAttempt || rejectPendingRef.current) {
+      return;
+    }
+
+    const rejectedFilename = rejectAttempt;
+    rejectPendingRef.current = true;
+    setRejectPending(true);
+
+    const deleted = await onDelete("train", [rejectedFilename]);
+
+    rejectPendingRef.current = false;
+    setRejectPending(false);
+
+    if (!deleted) {
+      return;
+    }
+
+    rejectedAttemptForFocusRef.current = rejectedFilename;
+    setRejectAttempt(null);
+    window.requestAnimationFrame(() => {
+      focusAfterRejection(rejectedFilename);
+    });
+  }, [focusAfterRejection, onDelete, rejectAttempt]);
+
   const classifiedEvent: ClassifiedEvent | undefined = useMemo(() => {
     if (!event) {
       return undefined;
@@ -995,54 +1048,113 @@ function FaceAttemptGroup({
   }, [event]);
 
   return (
-    <GroupedClassificationCard
-      group={group}
-      classifiedEvent={classifiedEvent}
-      event={event}
-      detectionMediaLabels={{
-        tabsLabel: t("details.mediaTabsLabel"),
-        faces: t("details.tabs.faces"),
-        fullFrame: t("details.tabs.fullFrame"),
-        playback: t("details.tabs.playback"),
-        fullFrameAlt: t("details.fullFrameAlt", {
-          camera: event?.camera ?? "",
-        }),
-        fullFrameUnavailable: t("details.fullFrameUnavailable"),
-      }}
-      threshold={threshold}
-      selectedItems={selectedFaces}
-      i18nLibrary="views/faceLibrary"
-      objectType="person"
-      noClassificationLabel="details.unknown"
-      onClick={(data) => {
-        if (data) {
-          onClickFaces([data.filename], true);
-        } else {
-          handleClickEvent(true);
-        }
-      }}
-    >
-      {(data) => (
-        <>
-          <FaceSelectionDialog
-            faceNames={faceNames}
-            onTrainAttempt={(name) => onTrainAttempt(data, name)}
-          >
-            <BlurredIconButton>
-              <AddFaceIcon className="size-5" />
-            </BlurredIconButton>
-          </FaceSelectionDialog>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <BlurredIconButton onClick={() => onReprocess(data)}>
-                <LuRefreshCw className="size-5" />
+    <>
+      <AlertDialog
+        open={rejectAttempt != null}
+        onOpenChange={(open) => {
+          if (!open && !rejectPendingRef.current) {
+            setRejectAttempt(null);
+          }
+        }}
+      >
+        <AlertDialogContent
+          onCloseAutoFocus={(event) => {
+            if (rejectedAttemptForFocusRef.current) {
+              event.preventDefault();
+              focusAfterRejection(rejectedAttemptForFocusRef.current);
+              rejectedAttemptForFocusRef.current = null;
+            }
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("notFace.title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("notFace.description")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={rejectPending}>
+              {t("button.cancel", { ns: "common" })}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              data-not-face-confirm
+              disabled={rejectPending}
+              aria-busy={rejectPending}
+              onClick={(event) => {
+                event.preventDefault();
+                void onRejectAttempt();
+              }}
+            >
+              {rejectPending ? t("notFace.pending") : t("notFace.confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <GroupedClassificationCard
+        group={group}
+        classifiedEvent={classifiedEvent}
+        event={event}
+        detectionMediaLabels={{
+          tabsLabel: t("details.mediaTabsLabel"),
+          faces: t("details.tabs.faces"),
+          fullFrame: t("details.tabs.fullFrame"),
+          playback: t("details.tabs.playback"),
+          fullFrameAlt: t("details.fullFrameAlt", {
+            camera: event?.camera ?? "",
+          }),
+          fullFrameUnavailable: t("details.fullFrameUnavailable"),
+        }}
+        threshold={threshold}
+        selectedItems={selectedFaces}
+        i18nLibrary="views/faceLibrary"
+        objectType="person"
+        noClassificationLabel="details.unknown"
+        onClick={(data) => {
+          if (data) {
+            onClickFaces([data.filename], true);
+          } else {
+            handleClickEvent(true);
+          }
+        }}
+      >
+        {(data) => (
+          <>
+            <FaceSelectionDialog
+              faceNames={faceNames}
+              onTrainAttempt={(name) => onTrainAttempt(data, name)}
+            >
+              <BlurredIconButton>
+                <AddFaceIcon className="size-5" />
               </BlurredIconButton>
-            </TooltipTrigger>
-            <TooltipContent>{t("button.reprocessFace")}</TooltipContent>
-          </Tooltip>
-        </>
-      )}
-    </GroupedClassificationCard>
+            </FaceSelectionDialog>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <BlurredIconButton onClick={() => onReprocess(data)}>
+                  <LuRefreshCw className="size-5" />
+                </BlurredIconButton>
+              </TooltipTrigger>
+              <TooltipContent>{t("button.reprocessFace")}</TooltipContent>
+            </Tooltip>
+            <Button
+              type="button"
+              variant="destructive"
+              className="h-auto min-h-12 whitespace-normal px-3 py-2 text-xs"
+              data-face-rejection-action={data.filename}
+              disabled={rejectPending}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (!rejectPendingRef.current) {
+                  setRejectAttempt(data.filename);
+                }
+              }}
+            >
+              {t("notFace.action")}
+            </Button>
+          </>
+        )}
+      </GroupedClassificationCard>
+    </>
   );
 }
 
@@ -1053,7 +1165,7 @@ type FaceGridProps = {
   pageToggle: string;
   selectedFaces: string[];
   onClickFaces: (images: string[], ctrl: boolean) => void;
-  onDelete: (name: string, ids: string[]) => void;
+  onDelete: (name: string, ids: string[]) => Promise<boolean>;
   onReclassify: (image: string, newName: string) => void;
 };
 function FaceGrid({
