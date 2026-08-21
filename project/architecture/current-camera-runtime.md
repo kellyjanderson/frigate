@@ -6,10 +6,18 @@ Last verified: 2026-08-20
 
 ## Scope
 
-This document records the deployed Logitech camera path. The generated V4L2
-control API and UI remain proposed in
-`acd/usb-v4l2-camera-controls.md` and are not described here as current
-behavior.
+This document records the deployed Logitech camera path. The VM now runs the
+merged fork at commit `a8be404d412ee79c7e739189eaecddd6ee292491` as
+`frigate-custom:0.18.0-a8be404d4-arm64`. The image layers the fork's backend
+and web bundle over the matching upstream ARM image
+`7ed7ed5-standard-arm64`, then adds ALSA utilities and FFmpeg.
+
+The installed tree contains the V4L2 transaction, descriptor, value-policy,
+provider, API-foundation, and descriptor-editor implementation artifacts from
+`acd/usb-v4l2-camera-controls.md`. These artifacts are installed but the final
+camera-control endpoints and discoverable settings surface are not yet wired,
+so physical camera control remains implemented in isolation rather than
+user-accessible.
 
 ## Runtime Path
 
@@ -22,6 +30,8 @@ behavior.
    `/dev/v4l/by-id/usb-046d_Logitech_Webcam_C930e_1A68415E-video-index0` and
    `video-index1`.
 4. Docker maps the V4L2, media, and sound devices into the Frigate container.
+   Compose uses the pinned custom image directly; no host web-directory bind
+   mount overrides the image's matching web bundle.
 5. go2rtc starts the bundled FFmpeg against the stable `video-index0` path,
    captures 1920 by 1080 MJPEG at 5 FPS, encodes H.264, and publishes the
    `logitech` RTSP stream inside Frigate.
@@ -47,6 +57,9 @@ AVFoundation camera bridge are stopped.
   activity, and UI access; restarts the tunnel and container first; and
   recreates only the Frigate Compose container and network when the first
   stage does not restore health.
+- Exact deployment sources remain at
+  `/home/k/frigate-releases/a8be404d4`, and the minimal image build context is
+  `/home/k/frigate-image-contexts/a8be404d4`.
 - VMware auto-connect matches USB vendor `046d` and product `0843`. The
   installer media is disconnected, so guest restart boots only the installed
   system.
@@ -71,16 +84,28 @@ The deployed route has been observed with:
   required to restore container networking, model initialization, API access,
   5.1 FPS processing, changing snapshots, and fresh recordings;
 - the live page and MSE stream reached from Chrome through the local tunnel.
+- the deployed backend and web file hashes matching the merged `dev` checkout;
+- Frigate reporting `0.18.0-a8be404d4`, with the image revision label pinned
+  to the full merge commit;
+- the post-upgrade UI with no nested interactive controls, no unlabeled
+  focusable controls, and 48 by 48 navigation hit targets that respond at the
+  edge;
+- C930e audio in the `logitech` RTSP stream as AAC, 48 kHz, mono;
+- post-upgrade camera and process rates of 5.1 FPS, zero skipped FPS, active
+  Apple detector inference, changing snapshots, and fresh ten-second recording
+  segments.
 
 ## Current Boundaries
 
 - Video capture, detection, recording, and local UI access are integrated.
-- The guest exposes the C930e audio capture device and Docker maps `/dev/snd`,
-  but the bundled Frigate FFmpeg lacks ALSA input support. Camera audio is not
-  currently present in the Frigate stream.
-- Frigate does not yet enumerate or write V4L2 controls through its API.
-- The UI does not yet generate physical camera controls from V4L2
-  descriptors.
+- The guest exposes the C930e audio capture device, Docker maps `/dev/snd`, and
+  the custom image supplies ALSA-capable FFmpeg. Camera audio is present in the
+  `logitech` RTSP stream.
+- The installed provider can enumerate and transact with V4L2 controls, but no
+  final authenticated descriptor/read/write endpoint exposes it to callers.
+- Descriptor normalization and editor components are installed, but the UI
+  does not yet generate discoverable physical camera controls because the
+  settings route and final API contracts remain unwired.
 - Live Image Levels remains display-only and does not modify the camera,
   recordings, snapshots, exports, or detector frames.
 - In the observed post-sleep failure, physical unplug/replug, a Frigate
@@ -92,6 +117,10 @@ The deployed route has been observed with:
   not cover battery operation or closing the laptop lid.
 
 ## Rollback
+
+The pre-upgrade Compose definition, ALSA Dockerfile, configuration, and
+database are preserved at
+`/home/k/frigate/backups/pre-a8be404d4-20260820`.
 
 Stop the VMware compose deployment, detach the C930e from the VM, bootstrap
 `com.keld.frigate-logitech`, bootstrap the previous `com.keld.frigate`
