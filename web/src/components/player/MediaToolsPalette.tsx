@@ -5,6 +5,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useUserPersistence } from "@/hooks/use-user-persistence";
+import { LIVE_IMAGE_MEDIA_SELECTOR } from "@/hooks/use-live-image-histogram";
 import { LiveImageLevels } from "@/types/live";
 import {
   DEFAULT_LIVE_IMAGE_LEVELS,
@@ -62,17 +63,11 @@ export default function MediaToolsPalette() {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [closePalette, isOpen]);
 
-  const mediaSelector = [
-    "body video:not([data-media-tools-ignore])",
-    "body img:not([data-media-tools-ignore])",
-    "body canvas[data-media-tools-target]",
-  ].join(",");
-
   return (
     <>
       <LiveImageLevelsFilter filterId={filterId} levels={levels} />
       {!isDefaultLiveImageLevels(levels) && (
-        <style>{`${mediaSelector} { filter: url("#${filterId}") !important; will-change: filter; }`}</style>
+        <style>{`${LIVE_IMAGE_MEDIA_SELECTOR} { filter: url("#${filterId}") !important; will-change: filter; }`}</style>
       )}
 
       {isOpen && (

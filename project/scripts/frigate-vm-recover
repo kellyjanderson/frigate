@@ -1,0 +1,155 @@
+#!/bin/zsh
+
+set -eu
+set -o pipefail
+
+readonly SSH="/usr/bin/ssh"
+readonly CURL="/usr/bin/curl"
+readonly JQ="/usr/bin/jq"
+readonly SHASUM="/usr/bin/shasum"
+readonly LAUNCHCTL="/bin/launchctl"
+readonly MKTEMP="/usr/bin/mktemp"
+readonly SHLOCK="/usr/bin/shlock"
+readonly SLEEP="/bin/sleep"
+readonly GREP="/usr/bin/grep"
+readonly ID="/usr/bin/id"
+readonly REMOTE="k@192.168.239.129"
+readonly SSH_KEY="/Users/k/.ssh/id_ed25519"
+readonly COMPOSE_DIR="/home/k/frigate"
+readonly CAMERA="logitech"
+readonly TUNNEL_LABEL="com.keld.frigate-vm-tunnel"
+readonly API_URL="http://127.0.0.1:5001"
+readonly UI_URL="https://127.0.0.1:8971/"
+readonly WAIT_ATTEMPTS=30
+readonly WAIT_SECONDS=3
+readonly LOCK_FILE="/tmp/frigate-vm-recover.lock"
+
+typeset -a TEMP_FILES
+TEMP_FILES=()
+typeset LOCK_HELD=false
+
+cleanup() {
+  local path
+  for path in "${TEMP_FILES[@]}"; do
+    /bin/rm -f "$path"
+  done
+  if [[ "$LOCK_HELD" == true ]]; then
+    /bin/rm -f "$LOCK_FILE"
+  fi
+}
+trap cleanup EXIT INT TERM
+
+if ! "$SHLOCK" -f "$LOCK_FILE" -p $$; then
+  /bin/echo "frigate-vm-recover: another recovery is already running" >&2
+  exit 75
+fi
+LOCK_HELD=true
+
+log() {
+  /bin/echo "frigate-vm-recover: $*"
+}
+
+remote() {
+  "$SSH" -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=8 "$REMOTE" "$@"
+}
+
+stats_are_healthy() {
+  local stats_file="$1"
+  "$JQ" -e --arg camera "$CAMERA" '
+    (.cameras[$camera].camera_fps // 0) > 0 and
+    (.cameras[$camera].process_fps // 0) > 0 and
+    (.cameras[$camera].skipped_fps // 1) == 0 and
+    (.detectors.apple_silicon.inference_speed // 0) > 0
+  ' "$stats_file" >/dev/null
+}
+
+snapshots_are_changing() {
+  local first second
+  first=$("$MKTEMP" /tmp/frigate-recover-snapshot-a.XXXXXX)
+  second=$("$MKTEMP" /tmp/frigate-recover-snapshot-b.XXXXXX)
+  TEMP_FILES+=("$first" "$second")
+
+  "$CURL" -fsS --max-time 5 "$API_URL/api/$CAMERA/latest.webp" -o "$first" || return 1
+  "$SLEEP" 2
+  "$CURL" -fsS --max-time 5 "$API_URL/api/$CAMERA/latest.webp" -o "$second" || return 1
+
+  [[ "$("$SHASUM" -a 256 "$first" | /usr/bin/awk '{print $1}')" != \
+    "$("$SHASUM" -a 256 "$second" | /usr/bin/awk '{print $1}')" ]]
+}
+
+recording_is_fresh() {
+  remote "docker exec frigate sh -c 'find /media/frigate/recordings -type f -mmin -2 -print -quit'" |
+    "$GREP" -q .
+}
+
+health_check() {
+  local stats_file ui_status
+  stats_file=$("$MKTEMP" /tmp/frigate-recover-stats.XXXXXX)
+  TEMP_FILES+=("$stats_file")
+
+  "$CURL" -fsS --max-time 5 "$API_URL/api/stats" -o "$stats_file" || return 1
+  [[ -s "$stats_file" ]] || return 1
+  stats_are_healthy "$stats_file" || return 1
+
+  ui_status=$("$CURL" -ksS -o /dev/null -w '%{http_code}' --max-time 5 "$UI_URL")
+  [[ "$ui_status" == "200" ]] || return 1
+  snapshots_are_changing || return 1
+  recording_is_fresh || return 1
+}
+
+wait_for_health() {
+  local attempt
+  for ((attempt = 1; attempt <= WAIT_ATTEMPTS; attempt++)); do
+    if health_check; then
+      return 0
+    fi
+    "$SLEEP" "$WAIT_SECONDS"
+  done
+  return 1
+}
+
+restart_tunnel() {
+  "$LAUNCHCTL" kickstart -k "gui/$("$ID" -u)/$TUNNEL_LABEL"
+}
+
+restart_container() {
+  remote "cd '$COMPOSE_DIR' && docker compose restart frigate"
+}
+
+recreate_compose() {
+  remote "cd '$COMPOSE_DIR' && docker compose down && docker compose up -d"
+}
+
+if [[ "${1:-}" == "--check" ]]; then
+  if health_check; then
+    log "healthy"
+    exit 0
+  fi
+  log "unhealthy"
+  exit 1
+fi
+
+if [[ $# -ne 0 ]]; then
+  /bin/echo "usage: $0 [--check]" >&2
+  exit 64
+fi
+
+if health_check; then
+  log "already healthy"
+  exit 0
+fi
+
+log "restarting the SSH tunnel and Frigate container"
+if restart_tunnel && restart_container && wait_for_health; then
+  log "recovered after container restart"
+  exit 0
+fi
+
+log "recreating the Frigate Compose container and network"
+if recreate_compose && restart_tunnel && wait_for_health; then
+  log "recovered after Compose recreation"
+  exit 0
+fi
+
+log "recovery failed; a true VMware guest power-off may be required"
+exit 1

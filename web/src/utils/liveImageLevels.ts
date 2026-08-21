@@ -107,6 +107,40 @@ export function updateLiveImageLevelPoint(
   return updated;
 }
 
+export function isLiveImageLevelPointTrapped(
+  levels: LiveImageLevels,
+  key: LiveImageLevelKey,
+) {
+  const normalized = normalizeLiveImageLevels(levels);
+  const keyIndex = LEVEL_KEYS.indexOf(key);
+  const minimum = keyIndex === 0 ? 0 : normalized[LEVEL_KEYS[keyIndex - 1]] + 1;
+  const maximum =
+    keyIndex === LEVEL_KEYS.length - 1
+      ? 255
+      : normalized[LEVEL_KEYS[keyIndex + 1]] - 1;
+
+  return minimum === maximum;
+}
+
+export function selectMovableLiveImageLevelPoint(
+  levels: LiveImageLevels,
+  hitKeys: LiveImageLevelKey[],
+) {
+  const firstHit = hitKeys[0];
+
+  if (
+    firstHit == undefined ||
+    !isLiveImageLevelPointTrapped(levels, firstHit)
+  ) {
+    return firstHit;
+  }
+
+  return (
+    hitKeys.find((key) => !isLiveImageLevelPointTrapped(levels, key)) ??
+    firstHit
+  );
+}
+
 export function createLiveImageLevelsTable(
   levels: LiveImageLevels,
   sampleCount = 256,

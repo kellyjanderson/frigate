@@ -1,7 +1,9 @@
 import {
   createLiveImageLevelsTable,
   DEFAULT_LIVE_IMAGE_LEVELS,
+  isLiveImageLevelPointTrapped,
   normalizeLiveImageLevels,
+  selectMovableLiveImageLevelPoint,
   updateLiveImageLevelPoint,
 } from "./liveImageLevels";
 import { describe, expect, it } from "vitest";
@@ -104,5 +106,37 @@ describe("live image levels", () => {
       ...DEFAULT_LIVE_IMAGE_LEVELS,
       midtonePoint: 65,
     });
+  });
+
+  it("identifies points trapped by their neighbors or an edge", () => {
+    const levels = {
+      blackPoint: 0,
+      shadowPoint: 1,
+      midtonePoint: 2,
+      highlightPoint: 200,
+      whitePoint: 255,
+    };
+
+    expect(isLiveImageLevelPointTrapped(levels, "blackPoint")).toBe(true);
+    expect(isLiveImageLevelPointTrapped(levels, "shadowPoint")).toBe(true);
+    expect(isLiveImageLevelPointTrapped(levels, "midtonePoint")).toBe(false);
+  });
+
+  it("selects the first movable point below a trapped hit point", () => {
+    const levels = {
+      blackPoint: 0,
+      shadowPoint: 1,
+      midtonePoint: 2,
+      highlightPoint: 200,
+      whitePoint: 255,
+    };
+
+    expect(
+      selectMovableLiveImageLevelPoint(levels, [
+        "shadowPoint",
+        "midtonePoint",
+        "blackPoint",
+      ]),
+    ).toBe("midtonePoint");
   });
 });

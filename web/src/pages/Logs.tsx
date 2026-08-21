@@ -594,7 +594,7 @@ function Logs() {
                     {follow && !logSettings.disableStreaming && (
                       <div className="absolute right-1 top-3">
                         <Tooltip>
-                          <TooltipTrigger>
+                          <TooltipTrigger asChild>
                             <MdCircle className="mr-2 size-2 animate-pulse cursor-default text-selected shadow-selected drop-shadow-md" />
                           </TooltipTrigger>
                           <TooltipContent>{t("logs.tips")}</TooltipContent>

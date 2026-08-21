@@ -141,6 +141,23 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     await frigateApp.goto("/#front_door");
     const live = new LivePage(frigateApp.page, true);
     await expect(live.backButton).toBeVisible({ timeout: 10_000 });
+    await frigateApp.page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 36;
+      canvas.dataset.mediaToolsTarget = "true";
+      canvas.style.cssText =
+        "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
+      const context = canvas.getContext("2d");
+      const gradient = context?.createLinearGradient(0, 0, canvas.width, 0);
+      gradient?.addColorStop(0, "black");
+      gradient?.addColorStop(1, "white");
+      if (context != null && gradient != null) {
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      document.body.append(canvas);
+    });
 
     const openPalette = async () => {
       await frigateApp.page
@@ -154,6 +171,9 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     };
 
     let palette = await openPalette();
+    await expect
+      .poll(() => palette.locator("[data-levels-histogram] rect").count())
+      .toBe(64);
     const shadows = palette.getByRole("slider", { name: "Shadows" });
     const midtones = palette.getByRole("slider", { name: "Midtones" });
     const shadowsBox = await shadows.boundingBox();
@@ -276,6 +296,51 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     await expect(
       frigateApp.page.getByRole("button", { name: "Open media tools" }),
     ).toBeVisible();
+  });
+
+  test("dragging a trapped levels handle selects a movable handle underneath", async ({
+    frigateApp,
+  }) => {
+    await frigateApp.goto("/#front_door");
+    const live = new LivePage(frigateApp.page, true);
+    await expect(live.backButton).toBeVisible({ timeout: 10_000 });
+    await frigateApp.page
+      .getByRole("button", { name: "Open media tools" })
+      .click();
+
+    const palette = frigateApp.page.getByRole("dialog", {
+      name: "Media tools",
+    });
+    const shadows = palette.getByRole("slider", { name: "Shadows" });
+    const midtones = palette.getByRole("slider", { name: "Midtones" });
+    const highlights = palette.getByRole("slider", { name: "Highlights" });
+
+    for (let step = 0; step < 63; step += 1) {
+      await shadows.press("ArrowRight");
+      await highlights.press("ArrowLeft");
+    }
+    await expect(shadows).toHaveAttribute("aria-valuenow", "127");
+    await expect(midtones).toHaveAttribute("aria-valuenow", "128");
+    await expect(highlights).toHaveAttribute("aria-valuenow", "129");
+
+    await midtones.focus();
+    const midtonesBox = await midtones.boundingBox();
+    expect(midtonesBox).not.toBeNull();
+    await frigateApp.page.mouse.move(
+      midtonesBox!.x + midtonesBox!.width / 2,
+      midtonesBox!.y + midtonesBox!.height / 2,
+    );
+    await frigateApp.page.mouse.down();
+    await frigateApp.page.mouse.move(
+      midtonesBox!.x + midtonesBox!.width,
+      midtonesBox!.y + midtonesBox!.height / 2,
+    );
+    await frigateApp.page.mouse.up();
+
+    await expect(midtones).toHaveAttribute("aria-valuenow", "128");
+    expect(
+      Number(await highlights.getAttribute("aria-valuenow")),
+    ).toBeGreaterThan(129);
   });
 });
 

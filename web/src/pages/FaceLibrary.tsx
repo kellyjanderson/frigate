@@ -1103,14 +1103,18 @@ function FaceGrid({
               </BlurredIconButton>
             </FaceSelectionDialog>
             <Tooltip>
-              <TooltipTrigger>
-                <LuTrash2
-                  className="size-5 cursor-pointer text-gray-200 hover:text-danger"
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={t("button.deleteFaceAttempts")}
+                  className="inline-flex size-8 items-center justify-center rounded-md text-gray-200 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={(e) => {
                     e.stopPropagation();
                     onDelete(pageToggle, [image]);
                   }}
-                />
+                >
+                  <LuTrash2 className="size-5" />
+                </button>
               </TooltipTrigger>
               <TooltipContent>{t("button.deleteFaceAttempts")}</TooltipContent>
             </Tooltip>

@@ -124,7 +124,7 @@
   "audio": "Audio",
   "levels": {
     "title": "Levels",
-    "description": "Drag the five handles to reshape the displayed tonal range without changing recordings.",
+    "description": "Use the live luminance histogram and five handles to reshape the displayed tonal range without changing recordings.",
     "blackPoint": "Black point",
     "shadows": "Shadows",
     "midtones": "Midtones",

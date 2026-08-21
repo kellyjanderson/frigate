@@ -175,26 +175,27 @@ function ThumbnailRow({
             />
           </div>
         ))}
-        <div
-          className="flex cursor-pointer items-center justify-center"
-          onClick={() => handleSearch(label)}
-        >
-          <Tooltip>
-            <TooltipTrigger>
-              <BsArrowRightCircle
-                className="ml-2 text-secondary-foreground transition-all duration-300 hover:text-primary"
-                size={24}
-              />
-            </TooltipTrigger>
-            <TooltipPortal>
-              <TooltipContent>
-                {t("exploreMore", {
-                  label: getTranslatedLabel(label, labelType),
-                })}
-              </TooltipContent>
-            </TooltipPortal>
-          </Tooltip>
-        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              aria-label={t("exploreMore", {
+                label: getTranslatedLabel(label, labelType),
+              })}
+              className="inline-flex size-11 items-center justify-center rounded-md text-secondary-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => handleSearch(label)}
+            >
+              <BsArrowRightCircle className="size-6" size={24} />
+            </button>
+          </TooltipTrigger>
+          <TooltipPortal>
+            <TooltipContent>
+              {t("exploreMore", {
+                label: getTranslatedLabel(label, labelType),
+              })}
+            </TooltipContent>
+          </TooltipPortal>
+        </Tooltip>
       </div>
     </div>
   );

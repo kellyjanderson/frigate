@@ -702,11 +702,15 @@ export default function InputWithTags({
           <div className="absolute right-3 top-0 flex h-full flex-row items-center justify-center gap-5">
             {(search || Object.keys(filters).length > 0) && (
               <Tooltip>
-                <TooltipTrigger>
-                  <LuX
-                    className="size-4 cursor-pointer text-secondary-foreground"
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={t("button.clear")}
+                    className="inline-flex size-8 items-center justify-center rounded-md text-secondary-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={handleClearInput}
-                  />
+                  >
+                    <LuX className="size-4" />
+                  </button>
                 </TooltipTrigger>
                 <TooltipPortal>
                   <TooltipContent>{t("button.clear")}</TooltipContent>
@@ -716,11 +720,15 @@ export default function InputWithTags({
 
             {(search || Object.keys(filters).length > 0) && (
               <Tooltip>
-                <TooltipTrigger>
-                  <LuStar
-                    className="size-4 cursor-pointer text-secondary-foreground"
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={t("button.save")}
+                    className="inline-flex size-8 items-center justify-center rounded-md text-secondary-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     onClick={handleSetSearchHistory}
-                  />
+                  >
+                    <LuStar className="size-4" />
+                  </button>
                 </TooltipTrigger>
                 <TooltipPortal>
                   <TooltipContent>{t("button.save")}</TooltipContent>
@@ -730,7 +738,7 @@ export default function InputWithTags({
 
             {isSimilaritySearch && (
               <Tooltip>
-                <TooltipTrigger className="cursor-default">
+                <TooltipTrigger asChild>
                   <MdImageSearch
                     aria-label={t("similaritySearch.active")}
                     className="size-4 text-selected"

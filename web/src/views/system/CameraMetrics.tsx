@@ -362,14 +362,18 @@ export default function CameraMetrics({
                             )}
                         </div>
                         <Tooltip>
-                          <TooltipTrigger>
-                            <MdInfo
-                              className="size-5 cursor-pointer text-muted-foreground"
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              aria-label={t("cameras.info.tips.title")}
+                              className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               onClick={() => {
                                 setShowCameraInfoDialog(true);
                                 setProbeCameraName(camera.name);
                               }}
-                            />
+                            >
+                              <MdInfo className="size-5" />
+                            </button>
                           </TooltipTrigger>
                           <TooltipContent>
                             {t("cameras.info.tips.title")}

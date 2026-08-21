@@ -21,7 +21,7 @@ export default function RestartRequiredIndicator({
 
   return (
     <Tooltip>
-      <TooltipTrigger>
+      <TooltipTrigger asChild>
         <span
           className={cn(
             "inline-flex cursor-default items-center text-muted-foreground",

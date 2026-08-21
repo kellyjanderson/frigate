@@ -651,7 +651,7 @@ export default function SearchView({
                         searchFilter?.search_type?.includes("similarity")) && (
                         <div className={cn("absolute right-2 top-2 z-40")}>
                           <Tooltip>
-                            <TooltipTrigger>
+                            <TooltipTrigger asChild>
                               <Chip
                                 className={`flex select-none items-center justify-between space-x-1 bg-gray-500 bg-gradient-to-br from-gray-400 to-gray-500 text-xs text-white smart-capitalize`}
                               >
