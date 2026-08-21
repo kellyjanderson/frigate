@@ -220,7 +220,7 @@ export default function GeneralSettings({
   return (
     <>
       <Container>
-        <Trigger>
+        <Trigger aria-label={t("menu.settings")}>
           <Tooltip>
             <TooltipTrigger asChild>
               <div

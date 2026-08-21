@@ -184,6 +184,11 @@ class CameraConfig(FrigateBaseModel):
         title="Camera URL",
         description="URL to visit the camera directly from system page",
     )
+    v4l2_device: str | None = Field(
+        None,
+        title="V4L2 device",
+        description="Stable Linux V4L2 device reference used for camera controls",
+    )
 
     profiles: dict[str, CameraProfileConfig] = Field(
         default_factory=dict,

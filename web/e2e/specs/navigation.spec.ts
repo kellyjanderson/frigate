@@ -32,8 +32,32 @@ test.describe("Navigation — primary links @critical", () => {
   test("logo links home on desktop", async ({ frigateApp }) => {
     test.skip(frigateApp.isMobile, "Sidebar logo is desktop-only");
     await frigateApp.goto("/review");
-    await frigateApp.page.locator("aside a[href='/']").first().click();
+    const logo = frigateApp.page.locator("aside a[href='/']").first();
+    await expect(logo).toHaveAccessibleName("Live");
+    await logo.click();
     await expect(frigateApp.page).toHaveURL(/\/$/);
+  });
+
+  test("desktop navigation has one full accessible hit target", async ({
+    frigateApp,
+  }) => {
+    test.skip(frigateApp.isMobile, "Sidebar is desktop-only");
+    await frigateApp.goto("/explore");
+
+    const reviewLink = frigateApp.page.locator('aside a[href="/review"]');
+    await expect(reviewLink).toHaveCount(1);
+    await expect(reviewLink).toHaveAccessibleName("Review");
+    await expect(
+      frigateApp.page.locator('aside button:has(a[href="/review"])'),
+    ).toHaveCount(0);
+
+    const target = await reviewLink.boundingBox();
+    expect(target).not.toBeNull();
+    expect(target!.width).toBeGreaterThanOrEqual(44);
+    expect(target!.height).toBeGreaterThanOrEqual(44);
+
+    await frigateApp.page.mouse.click(target!.x + 2, target!.y + 2);
+    await expect(frigateApp.page).toHaveURL(/\/review/);
   });
 
   test("unknown route redirects to /", async ({ frigateApp }) => {
@@ -138,11 +162,9 @@ test.describe("Navigation — settings menu (desktop) @critical", () => {
   for (const target of TARGETS) {
     test(`menu → ${target.label} navigates`, async ({ frigateApp }) => {
       await frigateApp.goto("/");
-      const gear = frigateApp.page
-        .locator("aside .mb-8 div[class*='cursor-pointer']")
-        .first();
+      const gear = frigateApp.page.locator("aside").getByLabel("Settings");
       await gear.click();
-      await frigateApp.page.getByLabel(target.label).click();
+      await frigateApp.page.getByRole("menu").getByLabel(target.label).click();
       await expect(frigateApp.page).toHaveURL(target.url);
     });
   }

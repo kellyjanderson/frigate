@@ -7,8 +7,10 @@ import AccountSettings from "../menu/AccountSettings";
 import useNavigation from "@/hooks/use-navigation";
 import { baseUrl } from "@/api/baseUrl";
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 function Sidebar() {
+  const { t } = useTranslation(["common"]);
   const basePath = useMemo(() => new URL(baseUrl).pathname, []);
 
   const isRootMatch = useMatch("/");
@@ -18,9 +20,8 @@ function Sidebar() {
 
   return (
     <aside className="scrollbar-container scrollbar-hidden absolute inset-y-0 left-0 z-10 flex w-[52px] flex-col justify-between overflow-y-auto border-r border-secondary-highlight bg-background_alt py-4">
-      <span tabIndex={0} className="sr-only" />
       <div className="flex w-full flex-col items-center gap-0">
-        <Link to="/">
+        <Link to="/" aria-label={t("menu.live.title")}>
           <Logo className="mb-6 h-8 w-8" />
         </Link>
         {navbarLinks.map((item) => {
@@ -30,7 +31,7 @@ function Sidebar() {
           return (
             <div key={item.id}>
               <NavItem
-                className={`mx-[10px] ${showCameraGroups ? "mb-2" : "mb-4"}`}
+                className={`size-12 ${showCameraGroups ? "mb-2" : "mb-4"}`}
                 item={item}
                 Icon={item.icon}
               />

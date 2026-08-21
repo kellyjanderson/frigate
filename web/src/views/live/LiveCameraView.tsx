@@ -344,7 +344,6 @@ export default function LiveCameraView({
     `${camera.name}-background-play`,
     false,
   );
-
   const [showStats, setShowStats] = useState(false);
   const [debug, setDebug] = useState(false);
 
@@ -1173,7 +1172,9 @@ function FrigateCameraFeatures({
         />
         {!fullscreen && (
           <DropdownMenu>
-            <DropdownMenuTrigger>
+            <DropdownMenuTrigger
+              aria-label={t("cameraSettings.title", { camera })}
+            >
               <div
                 className={cn(
                   "flex flex-col items-center justify-center rounded-lg bg-secondary p-2 text-secondary-foreground md:p-0",

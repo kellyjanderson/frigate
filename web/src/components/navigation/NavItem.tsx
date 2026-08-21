@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useMatch } from "react-router-dom";
 import {
   Tooltip,
   TooltipContent,
@@ -38,6 +38,7 @@ export default function NavItem({
   large,
 }: NavItemProps) {
   const { t } = useTranslation(["common"]);
+  const isActive = useMatch({ path: item.url, end: item.url === "/" });
   if (item.enabled == false) {
     return;
   }
@@ -46,14 +47,13 @@ export default function NavItem({
     <NavLink
       to={item.url}
       onClick={onClick}
-      className={({ isActive }) =>
-        cn(
-          "flex flex-col items-center justify-center rounded-lg p-[6px]",
-          className,
-          large && "size-12",
-          variants[item.variant ?? "primary"][isActive ? "active" : "inactive"],
-        )
-      }
+      aria-label={t(item.title)}
+      className={cn(
+        "flex flex-col items-center justify-center rounded-lg p-[6px]",
+        className,
+        large && "size-12",
+        variants[item.variant ?? "primary"][isActive ? "active" : "inactive"],
+      )}
     >
       <Icon className={large ? "size-6" : "size-5"} />
     </NavLink>
@@ -62,7 +62,7 @@ export default function NavItem({
   if (isDesktop) {
     return (
       <Tooltip>
-        <TooltipTrigger>{content}</TooltipTrigger>
+        <TooltipTrigger asChild>{content}</TooltipTrigger>
         <TooltipPortal>
           <TooltipContent side="right">
             <p>{t(item.title)}</p>

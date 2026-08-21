@@ -37,6 +37,14 @@ export type AudioState = Record<string, boolean>;
 export type StatsState = Record<string, boolean>;
 export type VolumeState = Record<string, number>;
 
+export type LiveImageLevels = {
+  blackPoint: number;
+  shadowPoint: number;
+  midtonePoint: number;
+  highlightPoint: number;
+  whitePoint: number;
+};
+
 export type PlayerStatsType = {
   streamType: string;
   bandwidth: number;

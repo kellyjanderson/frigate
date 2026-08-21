@@ -18,6 +18,7 @@ from ruamel.yaml import YAML
 from zeep.exceptions import Fault, TransportError
 from zeep.transports import AsyncTransport
 
+from frigate.api import camera_control
 from frigate.api.auth import (
     _get_stream_owner_cameras,
     allow_any_authenticated,
@@ -48,6 +49,7 @@ from frigate.util.services import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=[Tags.camera])
+router.include_router(camera_control.router)
 
 
 def _is_valid_host(host: str) -> bool:

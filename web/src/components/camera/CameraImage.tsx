@@ -9,6 +9,7 @@ import { useEnabledState } from "@/api/ws";
 
 type CameraImageProps = {
   className?: string;
+  imageStyle?: React.CSSProperties;
   camera: string;
   onload?: () => void;
   searchParams?: string;
@@ -16,6 +17,7 @@ type CameraImageProps = {
 
 export default function CameraImage({
   className,
+  imageStyle,
   camera,
   onload,
   searchParams = "",
@@ -86,6 +88,7 @@ export default function CameraImage({
       {enabled ? (
         <img
           ref={imgRef}
+          style={imageStyle}
           className={cn(
             "object-contain",
             imageLoaded

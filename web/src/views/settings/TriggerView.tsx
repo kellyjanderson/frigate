@@ -774,7 +774,7 @@ export default function TriggerView({
                                 {trigger_status?.triggers[trigger.name]
                                   ?.triggering_event_id && (
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <LuSearch className="size-3.5" />
                                     </TooltipTrigger>
                                     <TooltipContent>

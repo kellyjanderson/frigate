@@ -102,6 +102,7 @@ export default function CameraImage({
       {enabled ? (
         <canvas
           className="rounded-lg md:rounded-2xl"
+          data-media-tools-target
           data-testid="cameraimage-canvas"
           height={scaledHeight}
           ref={canvasRef}

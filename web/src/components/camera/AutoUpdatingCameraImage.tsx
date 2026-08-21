@@ -7,6 +7,7 @@ type AutoUpdatingCameraImageProps = {
   showFps?: boolean;
   className?: string;
   cameraClasses?: string;
+  imageStyle?: React.CSSProperties;
   reloadInterval?: number;
   periodicCache?: boolean;
 };
@@ -19,6 +20,7 @@ export default function AutoUpdatingCameraImage({
   showFps = true,
   className,
   cameraClasses,
+  imageStyle,
   reloadInterval = MIN_LOAD_TIMEOUT_MS,
   periodicCache = false,
 }: AutoUpdatingCameraImageProps) {
@@ -96,6 +98,7 @@ export default function AutoUpdatingCameraImage({
         onload={handleLoad}
         searchParams={cacheKey}
         className={cameraClasses}
+        imageStyle={imageStyle}
       />
       {showFps ? <span className="text-xs">Displaying at {fps}fps</span> : null}
     </div>

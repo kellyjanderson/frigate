@@ -122,6 +122,16 @@
   "streamingSettings": "Streaming Settings",
   "notifications": "Notifications",
   "audio": "Audio",
+  "levels": {
+    "title": "Levels",
+    "description": "Use the live luminance histogram and five handles to reshape the displayed tonal range without changing recordings.",
+    "blackPoint": "Black point",
+    "shadows": "Shadows",
+    "midtones": "Midtones",
+    "highlights": "Highlights",
+    "whitePoint": "White point",
+    "reset": "Reset levels"
+  },
   "suspend": {
     "forTime": "Suspend for: "
   },

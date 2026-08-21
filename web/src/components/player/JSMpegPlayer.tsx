@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 type JSMpegPlayerProps = {
   className?: string;
+  mediaStyle?: React.CSSProperties;
   camera: string;
   width: number;
   height: number;
@@ -23,6 +24,7 @@ export default function JSMpegPlayer({
   width,
   height,
   className,
+  mediaStyle,
   containerRef,
   playbackEnabled,
   useWebGL = false,
@@ -249,9 +251,11 @@ export default function JSMpegPlayer({
           <canvas
             ref={canvasRef}
             className="rounded-lg md:rounded-2xl"
+            data-media-tools-target
             style={{
               width: scaledWidth,
               height: scaledHeight,
+              ...mediaStyle,
             }}
           ></canvas>
         </div>

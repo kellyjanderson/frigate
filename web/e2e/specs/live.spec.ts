@@ -122,12 +122,10 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     const live = new LivePage(frigateApp.page, true);
     await expect(live.backButton).toBeVisible({ timeout: 10_000 });
 
-    // The gear icon button is the last button-like element in the
-    // single-camera header. Clicking it opens a Radix dropdown.
-    const gearButtons = frigateApp.page.locator("button:has(svg)");
-    const count = await gearButtons.count();
-    expect(count).toBeGreaterThan(0);
-    await gearButtons.last().click();
+    await frigateApp.page
+      .getByRole("button", { name: /settings/i })
+      .first()
+      .click();
 
     const menu = frigateApp.page
       .locator('[role="menu"], [data-radix-menu-content]')
@@ -135,6 +133,214 @@ test.describe("Live Single Camera — desktop controls @critical", () => {
     await expect(menu).toBeVisible({ timeout: 3_000 });
     await frigateApp.page.keyboard.press("Escape");
     await expect(menu).not.toBeVisible({ timeout: 3_000 });
+  });
+
+  test("floating media tools previews and persists a five-point levels adjustment", async ({
+    frigateApp,
+  }) => {
+    await frigateApp.goto("/#front_door");
+    const live = new LivePage(frigateApp.page, true);
+    await expect(live.backButton).toBeVisible({ timeout: 10_000 });
+    await frigateApp.page.evaluate(() => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 36;
+      canvas.dataset.mediaToolsTarget = "true";
+      canvas.style.cssText =
+        "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
+      const context = canvas.getContext("2d");
+      const gradient = context?.createLinearGradient(0, 0, canvas.width, 0);
+      gradient?.addColorStop(0, "black");
+      gradient?.addColorStop(1, "white");
+      if (context != null && gradient != null) {
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+      }
+      document.body.append(canvas);
+    });
+
+    const openPalette = async () => {
+      await frigateApp.page
+        .getByRole("button", { name: "Open media tools" })
+        .click();
+      const palette = frigateApp.page.getByRole("dialog", {
+        name: "Media tools",
+      });
+      await expect(palette).toBeVisible({ timeout: 3_000 });
+      return palette;
+    };
+
+    let palette = await openPalette();
+    await expect
+      .poll(() => palette.locator("[data-levels-histogram] rect").count())
+      .toBe(64);
+    const shadows = palette.getByRole("slider", { name: "Shadows" });
+    const midtones = palette.getByRole("slider", { name: "Midtones" });
+    const shadowsBox = await shadows.boundingBox();
+    const sliderBox = await palette
+      .locator("[data-levels-track]")
+      .boundingBox();
+    expect(shadowsBox).not.toBeNull();
+    expect(sliderBox).not.toBeNull();
+    await frigateApp.page.mouse.move(
+      shadowsBox!.x + shadowsBox!.width / 2,
+      shadowsBox!.y + shadowsBox!.height / 2,
+    );
+    await frigateApp.page.mouse.down();
+    await frigateApp.page.mouse.move(
+      sliderBox!.x + sliderBox!.width + shadowsBox!.width,
+      shadowsBox!.y + shadowsBox!.height / 2,
+      { steps: 10 },
+    );
+    await frigateApp.page.mouse.up();
+    expect(Number(await shadows.getAttribute("aria-valuenow"))).toBeLessThan(
+      128,
+    );
+    await expect(midtones).toHaveAttribute("aria-valuenow", "128");
+    for (let step = 0; step < 20; step += 1) {
+      await shadows.press("ArrowRight");
+    }
+    await expect(shadows).toHaveAttribute("aria-valuenow", "127");
+    await shadows.press("ArrowRight");
+    await expect(shadows).toHaveAttribute("aria-valuenow", "127");
+
+    const shadowGuide = palette
+      .locator('[data-level-guide="shadowPoint"] line')
+      .last();
+    await expect(shadowGuide).toHaveAttribute("x1", "64");
+    await expect(shadowGuide).toHaveAttribute("x2", "127");
+
+    await expect(midtones).toHaveAttribute("aria-valuenow", "128");
+    await midtones.focus();
+    await midtones.press("ArrowRight");
+    await expect(midtones).toHaveAttribute("aria-valuenow", "129");
+
+    await expect
+      .poll(() =>
+        frigateApp.page
+          .locator("#player-container video, #player-container canvas")
+          .evaluateAll((media) =>
+            media.some(
+              (element) => getComputedStyle(element).filter !== "none",
+            ),
+          ),
+      )
+      .toBe(true);
+
+    const transferFunction = frigateApp.page
+      .locator('filter[id^="media-tools-levels-"] feFuncR')
+      .first();
+    const firstTable = await transferFunction.getAttribute("tableValues");
+    await midtones.press("ArrowRight");
+    await expect(midtones).toHaveAttribute("aria-valuenow", "130");
+    await expect
+      .poll(() => transferFunction.getAttribute("tableValues"))
+      .not.toBe(firstTable);
+
+    await expect
+      .poll(() =>
+        frigateApp.page.evaluate(
+          () =>
+            new Promise<number | null>((resolve, reject) => {
+              const openRequest = indexedDB.open("keyval-store");
+              openRequest.onerror = () => reject(openRequest.error);
+              openRequest.onsuccess = () => {
+                const database = openRequest.result;
+                const transaction = database.transaction("keyval", "readonly");
+                const cursorRequest = transaction
+                  .objectStore("keyval")
+                  .openCursor();
+
+                cursorRequest.onerror = () => reject(cursorRequest.error);
+                cursorRequest.onsuccess = () => {
+                  const cursor = cursorRequest.result;
+
+                  if (!cursor) {
+                    database.close();
+                    resolve(null);
+                    return;
+                  }
+
+                  if (String(cursor.key).startsWith("media-tools-levels")) {
+                    const persistedLevels = cursor.value as {
+                      midtonePoint?: number;
+                    };
+                    database.close();
+                    resolve(persistedLevels.midtonePoint ?? null);
+                    return;
+                  }
+
+                  cursor.continue();
+                };
+              };
+            }),
+        ),
+      )
+      .toBe(130);
+
+    await frigateApp.page.keyboard.press("Escape");
+    await expect(palette).not.toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("button", { name: "Open media tools" }),
+    ).toBeFocused();
+    await frigateApp.page.reload();
+    await expect(live.backButton).toBeVisible({ timeout: 10_000 });
+
+    palette = await openPalette();
+    await expect(
+      palette.getByRole("slider", { name: "Midtones" }),
+    ).toHaveAttribute("aria-valuenow", "130");
+
+    await frigateApp.page.keyboard.press("Escape");
+    await frigateApp.goto("/review");
+    await expect(
+      frigateApp.page.getByRole("button", { name: "Open media tools" }),
+    ).toBeVisible();
+  });
+
+  test("dragging a trapped levels handle selects a movable handle underneath", async ({
+    frigateApp,
+  }) => {
+    await frigateApp.goto("/#front_door");
+    const live = new LivePage(frigateApp.page, true);
+    await expect(live.backButton).toBeVisible({ timeout: 10_000 });
+    await frigateApp.page
+      .getByRole("button", { name: "Open media tools" })
+      .click();
+
+    const palette = frigateApp.page.getByRole("dialog", {
+      name: "Media tools",
+    });
+    const shadows = palette.getByRole("slider", { name: "Shadows" });
+    const midtones = palette.getByRole("slider", { name: "Midtones" });
+    const highlights = palette.getByRole("slider", { name: "Highlights" });
+
+    for (let step = 0; step < 63; step += 1) {
+      await shadows.press("ArrowRight");
+      await highlights.press("ArrowLeft");
+    }
+    await expect(shadows).toHaveAttribute("aria-valuenow", "127");
+    await expect(midtones).toHaveAttribute("aria-valuenow", "128");
+    await expect(highlights).toHaveAttribute("aria-valuenow", "129");
+
+    await midtones.focus();
+    const midtonesBox = await midtones.boundingBox();
+    expect(midtonesBox).not.toBeNull();
+    await frigateApp.page.mouse.move(
+      midtonesBox!.x + midtonesBox!.width / 2,
+      midtonesBox!.y + midtonesBox!.height / 2,
+    );
+    await frigateApp.page.mouse.down();
+    await frigateApp.page.mouse.move(
+      midtonesBox!.x + midtonesBox!.width,
+      midtonesBox!.y + midtonesBox!.height / 2,
+    );
+    await frigateApp.page.mouse.up();
+
+    await expect(midtones).toHaveAttribute("aria-valuenow", "128");
+    expect(
+      Number(await highlights.getAttribute("aria-valuenow")),
+    ).toBeGreaterThan(129);
   });
 });
 
@@ -260,6 +466,33 @@ test.describe("Live mobile layout @critical @mobile", () => {
     const live = new LivePage(frigateApp.page, false);
     await live.cameraCard("front_door").first().click({ timeout: 10_000 });
     await expect(frigateApp.page).toHaveURL(/#front_door/);
+  });
+
+  test("mobile media tools expose the levels control", async ({
+    frigateApp,
+  }) => {
+    test.skip(!frigateApp.isMobile, "Mobile-only");
+    await frigateApp.goto("/#front_door");
+
+    await frigateApp.page
+      .getByRole("button", { name: "Open media tools" })
+      .click();
+
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "Black point" }),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "Shadows" }),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "Midtones" }),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "Highlights" }),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.getByRole("slider", { name: "White point" }),
+    ).toBeVisible();
   });
 
   test("mobile onvif single-camera view loads without freezing body", async ({

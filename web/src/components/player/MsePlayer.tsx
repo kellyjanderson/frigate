@@ -18,6 +18,7 @@ import { isIOS, isSafari } from "react-device-detect";
 type MSEPlayerProps = {
   camera: string;
   className?: string;
+  mediaStyle?: React.CSSProperties;
   playbackEnabled?: boolean;
   audioEnabled?: boolean;
   volume?: number;
@@ -33,6 +34,7 @@ type MSEPlayerProps = {
 function MSEPlayer({
   camera,
   className,
+  mediaStyle,
   playbackEnabled = true,
   audioEnabled = false,
   volume,
@@ -806,6 +808,7 @@ function MSEPlayer({
     <video
       ref={videoRef}
       className={className}
+      style={mediaStyle}
       playsInline
       preload="auto"
       onLoadedData={() => {

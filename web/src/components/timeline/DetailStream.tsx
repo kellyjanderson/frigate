@@ -517,7 +517,7 @@ function ReviewGroup({
               {review.data.metadata?.title && (
                 <div className="mb-1 flex min-w-0 items-center gap-1 text-sm text-primary-variant">
                   <Tooltip>
-                    <TooltipTrigger>
+                    <TooltipTrigger asChild>
                       <MdAutoAwesome className="size-3 shrink-0" />
                     </TooltipTrigger>
                     <TooltipContent>
@@ -899,7 +899,7 @@ function LifecycleItem({
 
       <div className="ml-0.5 flex min-w-0 flex-1">
         <Tooltip>
-          <TooltipTrigger>
+          <TooltipTrigger asChild>
             <div className="flex items-start break-words text-left">
               {getLifecycleItemDescription(item)}
             </div>
