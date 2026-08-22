@@ -1,5 +1,4 @@
 import AddFaceIcon from "@/components/icons/AddFaceIcon";
-import { baseUrl } from "@/api/baseUrl";
 import ActivityIndicator from "@/components/indicators/activity-indicator";
 import { EmptyCard } from "@/components/card/EmptyCard";
 import CreateFaceWizardDialog from "@/components/overlay/detail/FaceCreateWizardDialog";
@@ -74,6 +73,7 @@ import {
   ClassificationItemData,
   ClassifiedEvent,
 } from "@/types/classification";
+import { identifySavedFaceAttempt } from "./faceLibraryIdentify";
 
 export default function FaceLibrary() {
   const { t } = useTranslation(["views/faceLibrary"]);
@@ -129,19 +129,14 @@ export default function FaceLibrary() {
   }, []);
 
   const onIdentify = useCallback((data: ClassificationItemData) => {
-    let initialImageLink: string | undefined;
-    try {
-      const resolved = new URL(data.filepath, baseUrl);
-      if (resolved.origin === window.location.origin) {
-        initialImageLink = resolved.href;
-      }
-    } catch {
-      // An invalid crop link must not escape the existing manual-entry route.
-    }
-
-    identifyFocusTargetRef.current = data.filename;
-    setSelectedInitialImageLink(initialImageLink);
-    setAddFace(true);
+    identifySavedFaceAttempt(data, {
+      clearInitialImageLink: () => setSelectedInitialImageLink(undefined),
+      forwardInitialImageLink: setSelectedInitialImageLink,
+      openAddFace: () => setAddFace(true),
+      rememberFocusTarget: (filename) => {
+        identifyFocusTargetRef.current = filename;
+      },
+    });
   }, []);
 
   const setCreateFaceOpen = useCallback((open: boolean) => {

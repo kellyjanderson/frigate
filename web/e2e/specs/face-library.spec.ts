@@ -288,7 +288,7 @@ test.describe("Face Library - identify saved attempt route @high", () => {
     await expectBodyInteractive(frigateApp.page);
   });
 
-  test("rejects cross-origin and invalid crops without exposing their URLs or registering", async ({
+  test("rejects cross-origin redirects and invalid crop responses without exposing their URLs or registering", async ({
     frigateApp,
   }) => {
     const rejectedUrl = "https://rejected.example/private-crop.webp";
