@@ -57,6 +57,21 @@ function extensionMatchesMime(extension: string, mimeType: string): boolean {
   return extension === extensionForMime(mimeType);
 }
 
+function isSafeFilename(name: string): boolean {
+  const hasUnsafeCharacter = Array.from(name).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return (
+      character === "/" ||
+      character === "\\" ||
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f)
+    );
+  });
+  return (
+    name.length > 0 && name !== "." && name !== ".." && !hasUnsafeCharacter
+  );
+}
+
 function acceptsFile(
   file: Pick<File, "name" | "type" | "size">,
   accept: Record<string, string[]>,
@@ -170,6 +185,12 @@ export default function ImageEntry({
     },
     [form, revokePreview],
   );
+  const hydrationContractRef = useRef({ accept, maxSize });
+  const applyValidatedFileRef = useRef(applyValidatedFile);
+  const clearFileAndPreviewRef = useRef(clearFileAndPreview);
+  hydrationContractRef.current = { accept, maxSize };
+  applyValidatedFileRef.current = applyValidatedFile;
+  clearFileAndPreviewRef.current = clearFileAndPreview;
 
   const onDrop = useCallback(
     (acceptedFiles: File[]) => {
@@ -211,11 +232,13 @@ export default function ImageEntry({
   );
 
   useEffect(() => {
+    const hydrationAccept = hydrationContractRef.current.accept;
+    const hydrationMaxSize = hydrationContractRef.current.maxSize;
     hydrationRequestRef.current += 1;
     const requestId = hydrationRequestRef.current;
     hydrationControllerRef.current?.abort();
     hydrationControllerRef.current = null;
-    clearFileAndPreview();
+    clearFileAndPreviewRef.current();
     setHydrationFailed(false);
     setIsHydrating(false);
 
@@ -252,7 +275,7 @@ export default function ImageEntry({
         const declaredSize = response.headers.get("Content-Length");
         if (declaredSize !== null) {
           const parsedSize = Number(declaredSize);
-          if (Number.isFinite(parsedSize) && parsedSize > maxSize) {
+          if (Number.isFinite(parsedSize) && parsedSize > hydrationMaxSize) {
             controller.abort();
             if (hydrationRequestRef.current === requestId) {
               hydrationControllerRef.current = null;
@@ -264,7 +287,7 @@ export default function ImageEntry({
         }
 
         const blob = await response.blob();
-        if (blob.size === 0 || blob.size > maxSize) {
+        if (blob.size === 0 || blob.size > hydrationMaxSize) {
           throw new Error("Initial image has an invalid size");
         }
 
@@ -281,18 +304,22 @@ export default function ImageEntry({
           decodedName = "";
         }
         const decodedExtension = normalizedExtension(decodedName);
-        const admittedExtensions = Object.values(accept)
+        const admittedExtensions = Object.values(hydrationAccept)
           .flat()
           .map((value) => value.toLowerCase());
         let fileName = `initial-image${fallbackExtension}`;
-        if (decodedExtension && admittedExtensions.includes(decodedExtension)) {
+        if (
+          isSafeFilename(decodedName) &&
+          decodedExtension &&
+          admittedExtensions.includes(decodedExtension)
+        ) {
           if (!extensionMatchesMime(decodedExtension, blob.type)) {
             throw new Error("Initial image extension does not match its type");
           }
           fileName = decodedName;
         }
         const file = new File([blob], fileName, { type: blob.type });
-        if (!acceptsFile(file, accept, maxSize)) {
+        if (!acceptsFile(file, hydrationAccept, hydrationMaxSize)) {
           throw new Error("Initial image type is not accepted");
         }
 
@@ -303,7 +330,7 @@ export default function ImageEntry({
           return;
         }
         hydrationControllerRef.current = null;
-        applyValidatedFile(file);
+        applyValidatedFileRef.current(file);
       } catch {
         if (
           controller.signal.aborted ||
@@ -319,13 +346,7 @@ export default function ImageEntry({
 
     void hydrate();
     return () => controller.abort();
-  }, [
-    accept,
-    applyValidatedFile,
-    clearFileAndPreview,
-    initialImageLink,
-    maxSize,
-  ]);
+  }, [initialImageLink]);
 
   useEffect(() => {
     return () => {

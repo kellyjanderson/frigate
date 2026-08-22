@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ImageEntry from "./ImageEntry";
+import UploadImageDialog from "../overlay/dialog/UploadImageDialog";
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
@@ -134,7 +135,11 @@ describe("ImageEntry initial image hydration", () => {
       `${window.location.origin}/api/faces/crop.jpeg?token=private#ignored`,
     );
 
-    request.resolve(response(new Blob(["jpeg-bytes"], { type: "image/jpeg" })));
+    request.resolve(
+      response(new Blob(["jpeg-bytes"], { type: "image/jpeg" }), {
+        url: `${window.location.origin}/api/faces/crop.jpeg?token=private.png#ignored`,
+      }),
+    );
     await settle();
 
     expect(container.querySelector('img[src="blob:preview-1"]')).not.toBeNull();
@@ -183,6 +188,35 @@ describe("ImageEntry initial image hydration", () => {
       expect(document.body.textContent).not.toContain("private=name");
     },
   );
+
+  it.each([
+    ["decoded path separator", "private%2Fcrop.jpeg"],
+    ["decoded backslash", "private%5Ccrop.jpeg"],
+    ["decoded control character", "private%00crop.jpeg"],
+  ])("uses a fallback for a filename with a %s", async (_name, path) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        response(new Blob(["jpeg"], { type: "image/jpeg" }), {
+          url: `${window.location.origin}/api/faces/${path}?private.png#ignored`,
+        }),
+      ),
+    );
+    const { container, onSave } = renderEntry({
+      initialImageLink: `/api/faces/${path}`,
+    });
+    await settle();
+    act(() =>
+      (
+        container.querySelector("button[type=submit]") as HTMLButtonElement
+      ).click(),
+    );
+    await settle();
+
+    const savedFile = onSave.mock.calls[0][0] as File;
+    expect(savedFile.name).toBe("initial-image.jpeg");
+    expect(savedFile.name).not.toContain("private.png");
+  });
 
   it.each([
     ["malformed URL", "http://[", false],
@@ -342,6 +376,38 @@ describe("ImageEntry initial image hydration", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a local replacement across same-link contract rerenders", async () => {
+    const request = deferred<FetchResponse>();
+    const fetchMock = vi.fn(() => request.promise);
+    vi.stubGlobal("fetch", fetchMock);
+    const { container, onSave, rerender } = renderEntry({
+      initialImageLink: "/pending.jpeg",
+      accept: { "image/*": [".jpeg", ".jpg", ".png"] },
+    });
+    const localFile = new File(["local"], "local.png", { type: "image/png" });
+    selectFile(container, localFile);
+    await settle();
+
+    rerender({
+      initialImageLink: "/pending.jpeg",
+      accept: { "image/*": [".jpeg", ".jpg", ".png"] },
+      maxSize: 10 * 1024 * 1024,
+    });
+    await settle();
+    act(() =>
+      (
+        container.querySelector("button[type=submit]") as HTMLButtonElement
+      ).click(),
+    );
+    await settle();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith(localFile);
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(
+      "blob:preview-1",
+    );
+  });
+
   it("removes a loading image and ignores its eventual completion", async () => {
     const request = deferred<FetchResponse>();
     let signal: AbortSignal | undefined;
@@ -416,6 +482,43 @@ describe("ImageEntry initial image hydration", () => {
     expect(container.querySelector("img")?.getAttribute("src")).toBe(
       "blob:preview-1",
     );
+  });
+
+  it("preserves UploadImageDialog as an existing no-link consumer", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const onSave = vi.fn();
+    act(() => {
+      root.render(
+        <UploadImageDialog
+          open
+          title="Upload image"
+          description="Choose an image"
+          setOpen={vi.fn()}
+          onSave={onSave}
+        />,
+      );
+    });
+    const localFile = new File(["jpeg"], "consumer.jpeg", {
+      type: "image/jpeg",
+    });
+    selectFile(document.body, localFile);
+    await settle();
+    const saveButton = Array.from(
+      document.body.querySelectorAll("button[type=submit]"),
+    )[0] as HTMLButtonElement;
+    act(() => saveButton.click());
+    await settle();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onSave).toHaveBeenCalledWith(localFile);
+    expect(
+      document.body.querySelector('img[src="blob:preview-1"]'),
+    ).not.toBeNull();
   });
 
   it("uses the same validated file boundary for pasted images", async () => {
