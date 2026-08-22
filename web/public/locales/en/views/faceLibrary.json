@@ -78,6 +78,9 @@
     "validation": {
       "selectImage": "Please select an image file."
     },
+    "initialImageLoading": "Loading image…",
+    "initialImageFailure": "The image could not be loaded. Choose another image to continue.",
+    "removeInitialImage": "Remove initial image",
     "dropActive": "Drop the image here…",
     "dropInstructions": "Drag and drop or paste an image here, or click to select",
     "maxSize": "Max size: {{size}}MB"
