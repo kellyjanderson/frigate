@@ -102,6 +102,160 @@ async function openGroupedFaceDialog(
   return { detail, listThumbnailBox: listThumbnailBox! };
 }
 
+function addFaceWizard(app: FrigateApp) {
+  const heading = app.page.getByRole("heading", { name: "Add Face" });
+  return app.isMobile
+    ? app.page.locator("div.fixed.inset-0").filter({ has: heading }).last()
+    : app.page.getByRole("dialog").filter({ has: heading }).last();
+}
+
+async function advanceAddFaceName(app: FrigateApp, name: string) {
+  const wizard = addFaceWizard(app);
+  await expect(wizard).toBeVisible({ timeout: 5_000 });
+  await wizard.locator("input").fill(name);
+  await wizard.getByRole("button", { name: "Next" }).click();
+  return wizard;
+}
+
+async function closeOverlay(app: FrigateApp, overlay: Locator) {
+  await overlay
+    .getByRole("button", { name: app.isMobile ? "Back" : "Close" })
+    .click();
+  await expect(overlay).not.toBeVisible({ timeout: 5_000 });
+}
+
+test.describe("Face Library - identify saved attempt route @high", () => {
+  const validWebp = Buffer.from(
+    "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA",
+    "base64",
+  );
+
+  test("registers the exact identified crop through the existing Add Face flow", async ({
+    frigateApp,
+  }) => {
+    let hydratedCropUrl: string | undefined;
+    let registrationUrl: string | undefined;
+    let registrationBody: Buffer | null = null;
+
+    await installGroupedFaces(frigateApp);
+    let selectedFilename = "";
+    const selectedMarker = Buffer.from("selected-attempt-two");
+
+    await frigateApp.page.route("**/clips/faces/train/*", async (route) => {
+      const request = route.request();
+      const filename = decodeURIComponent(new URL(request.url()).pathname)
+        .split("/")
+        .pop();
+      if (request.resourceType() === "fetch") {
+        hydratedCropUrl = request.url();
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "image/webp",
+        body: Buffer.concat([
+          validWebp,
+          filename === selectedFilename
+            ? selectedMarker
+            : Buffer.from("other-attempt"),
+        ]),
+      });
+    });
+    await frigateApp.page.route(
+      "**/api/faces/route_person/register",
+      (route) => {
+        registrationUrl = route.request().url();
+        registrationBody = route.request().postDataBuffer();
+        return route.fulfill({ json: { success: true } });
+      },
+    );
+
+    const { detail } = await openGroupedFaceDialog(frigateApp, false);
+    const identifyActions = detail.getByRole("button", { name: "Identify" });
+    await expect(identifyActions).toHaveCount(2);
+    selectedFilename =
+      (await identifyActions
+        .nth(1)
+        .getAttribute("data-face-identify-action")) ?? "";
+    expect(selectedFilename).not.toBe("");
+    await identifyActions.nth(1).click();
+
+    const wizard = await advanceAddFaceName(frigateApp, "route_person");
+    await expect
+      .poll(() => hydratedCropUrl)
+      .toContain(`/clips/faces/train/${selectedFilename}`);
+    await expect(wizard.getByRole("img", { name: "Preview" })).toBeVisible();
+    await wizard.getByRole("button", { name: "Next" }).click();
+
+    await expect
+      .poll(() => registrationUrl)
+      .toContain("/api/faces/route_person/register");
+    expect(registrationBody).not.toBeNull();
+    expect(registrationBody!.includes(Buffer.from('name="file"'))).toBe(true);
+    expect(registrationBody!.includes(Buffer.from(selectedFilename))).toBe(
+      true,
+    );
+    expect(registrationBody!.includes(selectedMarker)).toBe(true);
+    await expect(wizard.getByRole("button", { name: "Done" })).toBeVisible();
+  });
+
+  test("clears identified state on close and toolbar Add Face", async ({
+    frigateApp,
+  }) => {
+    let hydrationFetches = 0;
+
+    await installGroupedFaces(frigateApp);
+    await frigateApp.page.route("**/clips/faces/train/*", async (route) => {
+      if (route.request().resourceType() === "fetch") {
+        hydrationFetches += 1;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "image/webp",
+        body: validWebp,
+      });
+    });
+
+    const { detail } = await openGroupedFaceDialog(frigateApp, false);
+    const identifyAction = detail
+      .getByRole("button", { name: "Identify" })
+      .first();
+    if (frigateApp.isMobile) {
+      await identifyAction.tap();
+    } else {
+      await identifyAction.focus();
+      await identifyAction.press("Enter");
+    }
+
+    const wizard = await advanceAddFaceName(frigateApp, "reset_person");
+    await expect.poll(() => hydrationFetches).toBe(1);
+    await expect(wizard.getByRole("img", { name: "Preview" })).toBeVisible();
+    await closeOverlay(frigateApp, wizard);
+    if (frigateApp.isMobile) {
+      await expect(
+        frigateApp.page.getByRole("button", { name: "Add Face" }),
+      ).toBeVisible();
+      await expect(
+        frigateApp.page.locator("#face-library-selector"),
+      ).toBeFocused();
+    } else {
+      await expect(identifyAction).toBeVisible();
+      await expect(identifyAction).toBeFocused();
+      await closeOverlay(frigateApp, detail);
+    }
+
+    await frigateApp.page.getByRole("button", { name: "Add Face" }).click();
+    const emptyWizard = await advanceAddFaceName(frigateApp, "empty_person");
+    await expect(emptyWizard.getByRole("img", { name: "Preview" })).toHaveCount(
+      0,
+    );
+    await expect(emptyWizard.getByText("Drag and drop or paste")).toBeVisible();
+    expect(hydrationFetches).toBe(1);
+    await closeOverlay(frigateApp, emptyWizard);
+    await waitForBodyInteractive(frigateApp.page);
+    await expectBodyInteractive(frigateApp.page);
+  });
+});
+
 test.describe("Face Library — local not-a-face rejection @high", () => {
   test.use({
     expectedErrors: [
