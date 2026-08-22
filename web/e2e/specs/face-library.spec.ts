@@ -69,8 +69,14 @@ async function installGroupedFaces(app: FrigateApp) {
   );
 }
 
-async function openGroupedFaceDialog(app: FrigateApp) {
-  await installGroupedFaces(app);
+async function openGroupedFaceDialog(
+  app: FrigateApp,
+  installMocks: boolean = true,
+  expectedAttemptCount: number = 2,
+) {
+  if (installMocks) {
+    await installGroupedFaces(app);
+  }
   await app.goto("/faces");
   const groupedImage = app.page
     .locator('img[src*="clips/faces/train/"]')
@@ -90,9 +96,225 @@ async function openGroupedFaceDialog(app: FrigateApp) {
         .filter({ has: app.page.locator('img[src*="clips/faces/train/"]') })
         .first();
   await expect(detail).toBeVisible({ timeout: 5_000 });
-  await expect(detail.locator('img[src*="clips/faces/train/"]')).toHaveCount(2);
+  await expect(detail.locator('img[src*="clips/faces/train/"]')).toHaveCount(
+    expectedAttemptCount,
+  );
   return { detail, listThumbnailBox: listThumbnailBox! };
 }
+
+test.describe("Face Library — local not-a-face rejection @high", () => {
+  test.use({
+    expectedErrors: [
+      /500.*\/api\/faces\/train\/delete|Failed to load resource.*500/,
+    ],
+  });
+
+  test("cancels or removes exactly one crop and keeps the removal after reload", async ({
+    frigateApp,
+  }) => {
+    let faces = groupedFacesMock();
+    let selectedFilename = "";
+    let siblingFilename = "";
+    let deleteRequests = 0;
+    let deleteUrl: string | undefined;
+    let deleteBody: unknown;
+
+    await installGroupedFaces(frigateApp);
+    await frigateApp.page.route("**/api/faces", (route) =>
+      route.fulfill({ json: faces }),
+    );
+    await frigateApp.page.route("**/api/faces/train/delete", async (route) => {
+      deleteRequests += 1;
+      deleteUrl = route.request().url();
+      deleteBody = route.request().postDataJSON();
+      const [requestedFilename] = (deleteBody as { ids: string[] }).ids;
+      faces = {
+        ...faces,
+        train: faces.train.filter((filename) => filename !== requestedFilename),
+      };
+      await route.fulfill({ json: { success: true } });
+    });
+
+    const { detail } = await openGroupedFaceDialog(frigateApp, false);
+    const rejectionActions = detail.getByRole("button", {
+      name: "That's not a face",
+    });
+    await expect(rejectionActions).toHaveCount(2);
+    selectedFilename =
+      (await rejectionActions
+        .first()
+        .getAttribute("data-face-rejection-action")) ?? "";
+    siblingFilename = faces.train.find(
+      (filename) => filename !== selectedFilename,
+    )!;
+
+    const actionBox = await rejectionActions.first().boundingBox();
+    expect(actionBox).not.toBeNull();
+    expect(actionBox!.height).toBeGreaterThanOrEqual(44);
+
+    await rejectionActions.first().click();
+    const confirmation = frigateApp.page.getByRole("alertdialog");
+    await expect(confirmation).toBeVisible();
+    await expect(confirmation).toContainText("event and recording will remain");
+    expect(deleteRequests).toBe(0);
+
+    await confirmation.getByRole("button", { name: "Cancel" }).click();
+    await expect(confirmation).not.toBeVisible();
+    expect(deleteRequests).toBe(0);
+    await expect(rejectionActions.first()).toBeVisible();
+    await expect(
+      detail.getByRole("button", { name: "That's not a face" }),
+    ).toHaveCount(2);
+
+    await rejectionActions.first().click();
+    await confirmation.getByRole("button", { name: "Remove crop" }).click();
+
+    await expect.poll(() => deleteRequests).toBe(1);
+    expect(deleteUrl).toMatch(/\/api\/faces\/train\/delete$/);
+    expect(deleteBody).toEqual({ ids: [selectedFilename] });
+    await expect(confirmation).not.toBeVisible();
+    await expect(detail.locator(`img[src*="${selectedFilename}"]`)).toHaveCount(
+      0,
+    );
+    await expect(
+      detail.locator(`img[src*="${siblingFilename}"]`),
+    ).toBeVisible();
+    await expect(
+      detail.getByRole("button", { name: "That's not a face" }),
+    ).toBeFocused();
+    await expect(
+      frigateApp.page.getByText("Successfully deleted 1 face."),
+    ).toBeVisible();
+
+    await frigateApp.page.reload();
+    await expect(
+      frigateApp.page.locator(`img[src*="${selectedFilename}"]`),
+    ).toHaveCount(0);
+    await expect(
+      frigateApp.page.locator(`img[src*="${siblingFilename}"]`),
+    ).toBeVisible();
+  });
+
+  test("holds one request pending, preserves failures, and permits one retry", async ({
+    frigateApp,
+  }) => {
+    let faces = groupedFacesMock();
+    let selectedFilename = "";
+    let deleteRequests = 0;
+    let releaseFailure!: () => void;
+    const heldFailure = new Promise<void>((resolve) => {
+      releaseFailure = resolve;
+    });
+
+    await installGroupedFaces(frigateApp);
+    await frigateApp.page.route("**/api/faces", (route) =>
+      route.fulfill({ json: faces }),
+    );
+    await frigateApp.page.route("**/api/faces/train/delete", async (route) => {
+      deleteRequests += 1;
+
+      if (deleteRequests === 1) {
+        await heldFailure;
+        await route.fulfill({
+          status: 500,
+          json: { message: "Disposable delete failure" },
+        });
+        return;
+      }
+
+      const deleteBody = route.request().postDataJSON() as { ids: string[] };
+      faces = {
+        ...faces,
+        train: faces.train.filter((filename) => filename !== deleteBody.ids[0]),
+      };
+      await route.fulfill({ json: { success: true } });
+    });
+
+    const { detail } = await openGroupedFaceDialog(frigateApp, false);
+    const rejectionAction = detail
+      .getByRole("button", { name: "That's not a face" })
+      .first();
+    selectedFilename =
+      (await rejectionAction.getAttribute("data-face-rejection-action")) ?? "";
+    await rejectionAction.click();
+    const confirmation = frigateApp.page.getByRole("alertdialog");
+    const confirm = confirmation.locator("[data-not-face-confirm]");
+    const cancel = confirmation.getByRole("button", { name: "Cancel" });
+    await confirm.click();
+
+    await expect.poll(() => deleteRequests).toBe(1);
+    await expect(confirmation).toBeVisible();
+    await expect(confirm).toBeDisabled();
+    await expect(cancel).toBeDisabled();
+    await confirm.evaluate((button: HTMLButtonElement) => button.click());
+    await expect.poll(() => deleteRequests).toBe(1);
+
+    releaseFailure();
+    await expect(confirm).toBeEnabled();
+    await expect(cancel).toBeEnabled();
+    await expect(confirmation).toBeVisible();
+    await expect(
+      frigateApp.page.locator(
+        `[data-face-rejection-action="${selectedFilename}"]`,
+      ),
+    ).toBeAttached();
+    await expect(
+      frigateApp.page.locator("[data-face-rejection-action]"),
+    ).toHaveCount(2);
+    await expect(
+      frigateApp.page.getByText("Failed to delete: Disposable delete failure"),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.getByText("Successfully deleted 1 face."),
+    ).toHaveCount(0);
+
+    await confirm.click();
+    await expect.poll(() => deleteRequests).toBe(2);
+    await expect(confirmation).not.toBeVisible();
+    await expect(detail.locator(`img[src*="${selectedFilename}"]`)).toHaveCount(
+      0,
+    );
+  });
+
+  test("removing the last attempt restores the established empty state", async ({
+    frigateApp,
+  }) => {
+    let faces = withGroupedTrainingAttempt(basicFacesMock(), {
+      eventId: GROUPED_EVENT_ID,
+      attempts: [
+        { timestamp: 1775487131.3863528, label: "unknown", score: 0.95 },
+      ],
+    });
+
+    await frigateApp.api.install({ events: [GROUPED_EVENT], faces });
+    await frigateApp.page.route("**/api/event_ids*", (route) =>
+      route.fulfill({ json: [GROUPED_EVENT] }),
+    );
+    await frigateApp.page.route("**/api/faces", (route) =>
+      route.fulfill({ json: faces }),
+    );
+    await frigateApp.page.route("**/api/faces/train/delete", async (route) => {
+      faces = { ...faces, train: [] };
+      await route.fulfill({ json: { success: true } });
+    });
+
+    const { detail } = await openGroupedFaceDialog(frigateApp, false, 1);
+    await detail.getByRole("button", { name: "That's not a face" }).click();
+    await frigateApp.page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Remove crop" })
+      .click();
+
+    await expect(
+      frigateApp.page.getByText(
+        "There are no recent face recognition attempts",
+      ),
+    ).toBeVisible();
+    await expect(
+      frigateApp.page.locator("#face-library-selector"),
+    ).toBeFocused();
+  });
+});
 
 test.describe("Face Library — recognition media detail @high", () => {
   test("unknown recognition opens full frame and playback at detection time", async ({
