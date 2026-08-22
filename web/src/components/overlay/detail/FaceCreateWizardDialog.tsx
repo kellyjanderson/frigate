@@ -32,11 +32,13 @@ type CreateFaceWizardDialogProps = {
   open: boolean;
   setOpen: (open: boolean) => void;
   onFinish: () => void;
+  initialImageLink?: string;
 };
 export default function CreateFaceWizardDialog({
   open,
   setOpen,
   onFinish,
+  initialImageLink,
 }: CreateFaceWizardDialogProps) {
   const { t } = useTranslation("views/faceLibrary");
   const { getLocaleDocUrl } = useDocDomain();
@@ -104,7 +106,7 @@ export default function CreateFaceWizardDialog({
       <Content
         className={cn(
           "flex flex-col gap-4",
-          isDesktop ? (step == 0 ? "max-w-xl" : "max-w-3xl") : "p-4",
+          isDesktop ? (step == 0 ? "max-w-xl" : "max-w-3xl") : "z-[60] p-4",
         )}
       >
         <StepIndicator
@@ -143,7 +145,10 @@ export default function CreateFaceWizardDialog({
             <div className="px-8 py-2 text-center text-sm text-secondary-foreground">
               {t("steps.description.uploadFace", { name })}
             </div>
-            <ImageEntry onSave={onUploadImage}>
+            <ImageEntry
+              onSave={onUploadImage}
+              initialImageLink={initialImageLink}
+            >
               <div className="flex flex-col-reverse gap-2 py-2 sm:flex-row sm:justify-end">
                 <Button variant="select" type="submit">
                   {t("button.next", { ns: "common" })}

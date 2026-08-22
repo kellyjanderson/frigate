@@ -73,6 +73,7 @@ import {
   ClassificationItemData,
   ClassifiedEvent,
 } from "@/types/classification";
+import { identifySavedFaceAttempt } from "./faceLibraryIdentify";
 
 export default function FaceLibrary() {
   const { t } = useTranslation(["views/faceLibrary"]);
@@ -116,6 +117,74 @@ export default function FaceLibrary() {
 
   const [upload, setUpload] = useState(false);
   const [addFace, setAddFace] = useState(false);
+  const [selectedInitialImageLink, setSelectedInitialImageLink] = useState<
+    string | undefined
+  >();
+  const identifyFocusTargetRef = useRef<string | null>(null);
+
+  const openEmptyAddFace = useCallback(() => {
+    identifyFocusTargetRef.current = null;
+    setSelectedInitialImageLink(undefined);
+    setAddFace(true);
+  }, []);
+
+  const onIdentify = useCallback((data: ClassificationItemData) => {
+    identifySavedFaceAttempt(data, {
+      clearInitialImageLink: () => setSelectedInitialImageLink(undefined),
+      forwardInitialImageLink: setSelectedInitialImageLink,
+      openAddFace: () => setAddFace(true),
+      rememberFocusTarget: (filename) => {
+        identifyFocusTargetRef.current = filename;
+      },
+    });
+  }, []);
+
+  const setCreateFaceOpen = useCallback((open: boolean) => {
+    if (!open) {
+      const identifyFocusTarget = identifyFocusTargetRef.current;
+      identifyFocusTargetRef.current = null;
+      setSelectedInitialImageLink(undefined);
+      if (identifyFocusTarget) {
+        const findIdentifyAction = () =>
+          Array.from(
+            document.querySelectorAll<HTMLButtonElement>(
+              "[data-face-identify-action]",
+            ),
+          ).find(
+            (button) =>
+              button.dataset.faceIdentifyAction === identifyFocusTarget,
+          );
+        const focusLibrarySelector = () =>
+          document
+            .querySelector<HTMLElement>("#face-library-selector")
+            ?.focus();
+
+        if (isMobileOnly) {
+          const observer = new MutationObserver(() => {
+            if (!findIdentifyAction()) {
+              observer.disconnect();
+              focusLibrarySelector();
+            }
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+          window.setTimeout(() => {
+            observer.disconnect();
+            if (!findIdentifyAction()) {
+              focusLibrarySelector();
+            }
+          }, 2000);
+        }
+
+        window.requestAnimationFrame(() => {
+          (
+            findIdentifyAction() ??
+            document.querySelector<HTMLElement>("#face-library-selector")
+          )?.focus();
+        });
+      }
+    }
+    setAddFace(open);
+  }, []);
 
   // input focus for keyboard shortcuts
   const onUploadImage = useCallback(
@@ -388,8 +457,9 @@ export default function FaceLibrary() {
 
       <CreateFaceWizardDialog
         open={addFace}
-        setOpen={setAddFace}
+        setOpen={setCreateFaceOpen}
         onFinish={refreshFaces}
+        initialImageLink={selectedInitialImageLink}
       />
 
       <div className="relative mb-2 flex h-11 w-full items-center justify-between">
@@ -449,7 +519,11 @@ export default function FaceLibrary() {
           </div>
         ) : (
           <div className="flex items-center justify-center gap-2">
-            <Button className="flex gap-2" onClick={() => setAddFace(true)}>
+            <Button
+              className="flex gap-2"
+              aria-label={t("button.addFace")}
+              onClick={openEmptyAddFace}
+            >
               <LuScanFace className="size-7 rounded-md p-1 text-secondary-foreground" />
               {isDesktop && t("button.addFace")}
             </Button>
@@ -479,7 +553,8 @@ export default function FaceLibrary() {
             isLoading={faceData === undefined}
             onClickFaces={onClickFaces}
             onDelete={onDelete}
-            onAddFace={() => setAddFace(true)}
+            onAddFace={openEmptyAddFace}
+            onIdentify={onIdentify}
             onRefresh={refreshFaces}
           />
         ) : (
@@ -703,6 +778,7 @@ type TrainingGridProps = {
   onClickFaces: (images: string[], ctrl: boolean) => void;
   onDelete: (name: string, ids: string[]) => Promise<boolean>;
   onAddFace: () => void;
+  onIdentify: (data: ClassificationItemData) => void;
   onRefresh: (
     data?:
       | FaceLibraryData
@@ -723,6 +799,7 @@ function TrainingGrid({
   onClickFaces,
   onDelete,
   onAddFace,
+  onIdentify,
   onRefresh,
 }: TrainingGridProps) {
   const { t } = useTranslation(["views/faceLibrary"]);
@@ -823,6 +900,7 @@ function TrainingGrid({
               onClickFaces={onClickFaces}
               onDelete={onDelete}
               onRefresh={onRefresh}
+              onIdentify={onIdentify}
             />
           </div>
         );
@@ -839,6 +917,7 @@ type FaceAttemptGroupProps = {
   selectedFaces: string[];
   onClickFaces: (image: string[], ctrl: boolean) => void;
   onDelete: (name: string, ids: string[]) => Promise<boolean>;
+  onIdentify: (data: ClassificationItemData) => void;
   onRefresh: (
     data?:
       | FaceLibraryData
@@ -858,6 +937,7 @@ function FaceAttemptGroup({
   onClickFaces,
   onDelete,
   onRefresh,
+  onIdentify,
 }: FaceAttemptGroupProps) {
   const { t } = useTranslation(["views/faceLibrary", "views/explore"]);
   const [rejectAttempt, setRejectAttempt] = useState<string | null>(null);
@@ -1120,6 +1200,18 @@ function FaceAttemptGroup({
       >
         {(data) => (
           <>
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-auto min-h-12 whitespace-normal px-3 py-2 text-xs"
+              data-face-identify-action={data.filename}
+              onClick={(event) => {
+                event.stopPropagation();
+                onIdentify(data);
+              }}
+            >
+              {t("button.identify")}
+            </Button>
             <FaceSelectionDialog
               faceNames={faceNames}
               onTrainAttempt={(name) => onTrainAttempt(data, name)}

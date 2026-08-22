@@ -69,6 +69,7 @@
   "button": {
     "deleteFaceAttempts": "Delete Faces",
     "addFace": "Add Face",
+    "identify": "Identify",
     "renameFace": "Rename Face",
     "deleteFace": "Delete Face",
     "uploadImage": "Upload Image",

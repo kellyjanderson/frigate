@@ -102,6 +102,424 @@ async function openGroupedFaceDialog(
   return { detail, listThumbnailBox: listThumbnailBox! };
 }
 
+function addFaceWizard(app: FrigateApp) {
+  const heading = app.page.getByRole("heading", { name: "Add Face" });
+  return app.isMobile
+    ? app.page.locator("div.fixed.inset-0").filter({ has: heading }).last()
+    : app.page.getByRole("dialog").filter({ has: heading }).last();
+}
+
+async function advanceAddFaceName(app: FrigateApp, name: string) {
+  const wizard = addFaceWizard(app);
+  await expect(wizard).toBeVisible({ timeout: 5_000 });
+  await wizard.locator("input").fill(name);
+  await wizard.getByRole("button", { name: "Next" }).click();
+  return wizard;
+}
+
+async function closeOverlay(app: FrigateApp, overlay: Locator) {
+  await overlay
+    .getByRole("button", { name: app.isMobile ? "Back" : "Close" })
+    .click();
+  await expect(overlay).not.toBeVisible({ timeout: 5_000 });
+}
+
+async function expectWizardContained(app: FrigateApp, wizard: Locator) {
+  const viewport = app.page.viewportSize();
+  const box = await wizard.boundingBox();
+  expect(viewport).not.toBeNull();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height + 1);
+  expect(box!.width).toBeLessThanOrEqual(viewport!.width);
+  await expect
+    .poll(() =>
+      wizard.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth + 1,
+      ),
+    )
+    .toBe(true);
+}
+
+async function openIdentifiedWizard(
+  app: FrigateApp,
+  attemptIndex: number,
+  name: string,
+) {
+  const { detail } = await openGroupedFaceDialog(app, false);
+  const identifyActions = detail.getByRole("button", { name: "Identify" });
+  await expect(identifyActions).toHaveCount(2);
+  await identifyActions.nth(attemptIndex).click();
+  const wizard = await advanceAddFaceName(app, name);
+  await expectWizardContained(app, wizard);
+  return { detail, wizard };
+}
+
+test.describe("Face Library - identify saved attempt route @high", () => {
+  const validWebp = Buffer.from(
+    "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA",
+    "base64",
+  );
+
+  test("registers the exact identified crop through the existing Add Face flow", async ({
+    frigateApp,
+  }) => {
+    let hydratedCropUrl: string | undefined;
+    let registrationUrl: string | undefined;
+    let registrationBody: Buffer | null = null;
+
+    await installGroupedFaces(frigateApp);
+    let selectedFilename = "";
+    const selectedMarker = Buffer.from("selected-attempt-two");
+
+    await frigateApp.page.route("**/clips/faces/train/*", async (route) => {
+      const request = route.request();
+      const filename = decodeURIComponent(new URL(request.url()).pathname)
+        .split("/")
+        .pop();
+      if (request.resourceType() === "fetch") {
+        hydratedCropUrl = request.url();
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "image/webp",
+        body: Buffer.concat([
+          validWebp,
+          filename === selectedFilename
+            ? selectedMarker
+            : Buffer.from("other-attempt"),
+        ]),
+      });
+    });
+    await frigateApp.page.route(
+      "**/api/faces/route_person/register",
+      (route) => {
+        registrationUrl = route.request().url();
+        registrationBody = route.request().postDataBuffer();
+        return route.fulfill({ json: { success: true } });
+      },
+    );
+
+    const { detail } = await openGroupedFaceDialog(frigateApp, false);
+    const identifyActions = detail.getByRole("button", { name: "Identify" });
+    await expect(identifyActions).toHaveCount(2);
+    selectedFilename =
+      (await identifyActions
+        .nth(1)
+        .getAttribute("data-face-identify-action")) ?? "";
+    expect(selectedFilename).not.toBe("");
+    await identifyActions.nth(1).click();
+
+    const wizard = await advanceAddFaceName(frigateApp, "route_person");
+    await expect
+      .poll(() => hydratedCropUrl)
+      .toContain(`/clips/faces/train/${selectedFilename}`);
+    await expect(wizard.getByRole("img", { name: "Preview" })).toBeVisible();
+    await wizard.getByRole("button", { name: "Next" }).click();
+
+    await expect
+      .poll(() => registrationUrl)
+      .toContain("/api/faces/route_person/register");
+    expect(registrationBody).not.toBeNull();
+    expect(registrationBody!.includes(Buffer.from('name="file"'))).toBe(true);
+    expect(registrationBody!.includes(Buffer.from(selectedFilename))).toBe(
+      true,
+    );
+    expect(registrationBody!.includes(selectedMarker)).toBe(true);
+    await expect(wizard.getByRole("button", { name: "Done" })).toBeVisible();
+  });
+
+  test("clears identified state on close and toolbar Add Face", async ({
+    frigateApp,
+  }) => {
+    let hydrationFetches = 0;
+
+    await installGroupedFaces(frigateApp);
+    await frigateApp.page.route("**/clips/faces/train/*", async (route) => {
+      if (route.request().resourceType() === "fetch") {
+        hydrationFetches += 1;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "image/webp",
+        body: validWebp,
+      });
+    });
+
+    const { detail } = await openGroupedFaceDialog(frigateApp, false);
+    const identifyAction = detail
+      .getByRole("button", { name: "Identify" })
+      .first();
+    if (frigateApp.isMobile) {
+      await identifyAction.tap();
+    } else {
+      await identifyAction.focus();
+      await identifyAction.press("Enter");
+    }
+
+    const wizard = await advanceAddFaceName(frigateApp, "reset_person");
+    await expect.poll(() => hydrationFetches).toBe(1);
+    await expect(wizard.getByRole("img", { name: "Preview" })).toBeVisible();
+    await closeOverlay(frigateApp, wizard);
+    if (frigateApp.isMobile) {
+      await expect(
+        frigateApp.page.getByRole("button", { name: "Add Face" }),
+      ).toBeVisible();
+      await expect(
+        frigateApp.page.locator("#face-library-selector"),
+      ).toBeFocused();
+    } else {
+      await expect(identifyAction).toBeVisible();
+      await expect(identifyAction).toBeFocused();
+      await closeOverlay(frigateApp, detail);
+    }
+
+    await frigateApp.page.getByRole("button", { name: "Add Face" }).click();
+    const emptyWizard = await advanceAddFaceName(frigateApp, "empty_person");
+    await expect(emptyWizard.getByRole("img", { name: "Preview" })).toHaveCount(
+      0,
+    );
+    await expect(emptyWizard.getByText("Drag and drop or paste")).toBeVisible();
+    expect(hydrationFetches).toBe(1);
+    await closeOverlay(frigateApp, emptyWizard);
+    await waitForBodyInteractive(frigateApp.page);
+    await expectBodyInteractive(frigateApp.page);
+  });
+
+  test("rejects cross-origin redirects and invalid crop responses without exposing their URLs or registering", async ({
+    frigateApp,
+  }) => {
+    const rejectedUrl = "https://rejected.example/private-crop.webp";
+    let registrationRequests = 0;
+    let manualRegistrationBody: Buffer | null = null;
+
+    await installGroupedFaces(frigateApp);
+    await frigateApp.page.route(rejectedUrl, (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "image/webp",
+        headers: { "Access-Control-Allow-Origin": "*" },
+        body: validWebp,
+      }),
+    );
+    await frigateApp.page.route("**/clips/faces/train/*", (route) => {
+      const filename = decodeURIComponent(
+        new URL(route.request().url()).pathname,
+      )
+        .split("/")
+        .pop();
+      if (filename?.includes("1775487131.3863528")) {
+        return route.fulfill({
+          status: 302,
+          headers: { Location: rejectedUrl },
+        });
+      }
+      return route.fulfill({
+        status: 200,
+        contentType: "text/plain",
+        body: "malformed crop payload",
+      });
+    });
+    await frigateApp.page.route("**/api/faces/*/register", (route) => {
+      registrationRequests += 1;
+      manualRegistrationBody = route.request().postDataBuffer();
+      return route.fulfill({ json: { success: true } });
+    });
+
+    const crossOrigin = await openIdentifiedWizard(
+      frigateApp,
+      0,
+      "rejected_person",
+    );
+    await expect(
+      crossOrigin.wizard.getByText("The image could not be loaded"),
+    ).toBeVisible();
+    await expect(
+      crossOrigin.wizard.getByRole("button", { name: "Next" }),
+    ).toBeDisabled();
+    await expect(crossOrigin.wizard).not.toContainText(rejectedUrl);
+    expect(
+      await crossOrigin.wizard.evaluate((element) => element.outerHTML),
+    ).not.toContain("rejected.example");
+    expect(registrationRequests).toBe(0);
+    await closeOverlay(frigateApp, crossOrigin.wizard);
+
+    const invalid = await openIdentifiedWizard(
+      frigateApp,
+      1,
+      "manual_recovery",
+    );
+    await expect(
+      invalid.wizard.getByText("The image could not be loaded"),
+    ).toBeVisible();
+    expect(registrationRequests).toBe(0);
+
+    const manualMarker = Buffer.from("manual-recovery-bytes");
+    await invalid.wizard.locator('input[type="file"]').setInputFiles({
+      name: "manual.webp",
+      mimeType: "image/webp",
+      buffer: Buffer.concat([validWebp, manualMarker]),
+    });
+    await expect(
+      invalid.wizard.getByRole("img", { name: "Preview" }),
+    ).toBeVisible();
+    await invalid.wizard.getByRole("button", { name: "Next" }).click();
+    await expect.poll(() => registrationRequests).toBe(1);
+    expect(manualRegistrationBody).not.toBeNull();
+    expect(manualRegistrationBody!.includes(manualMarker)).toBe(true);
+    expect(
+      manualRegistrationBody!.includes(Buffer.from("malformed crop payload")),
+    ).toBe(false);
+  });
+
+  test("blocks pending submission and registers only current replacement bytes", async ({
+    frigateApp,
+  }) => {
+    let releaseHydration!: () => void;
+    const hydrationGate = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    let registrationRequests = 0;
+    let registrationBody: Buffer | null = null;
+    const staleMarker = Buffer.from("stale-initial-crop");
+    const replacementMarker = Buffer.from("current-replacement-crop");
+
+    await installGroupedFaces(frigateApp);
+    await frigateApp.page.route("**/clips/faces/train/*", async (route) => {
+      if (route.request().resourceType() === "fetch") {
+        await hydrationGate;
+      }
+      await route
+        .fulfill({
+          status: 200,
+          contentType: "image/webp",
+          body: Buffer.concat([validWebp, staleMarker]),
+        })
+        .catch(() => undefined);
+    });
+    await frigateApp.page.route("**/api/faces/*/register", (route) => {
+      registrationRequests += 1;
+      registrationBody = route.request().postDataBuffer();
+      return route.fulfill({ json: { success: true } });
+    });
+
+    const { wizard } = await openIdentifiedWizard(
+      frigateApp,
+      0,
+      "replacement_person",
+    );
+    await expect(wizard.locator("form")).toHaveAttribute("aria-busy", "true");
+    await expect(wizard.getByText("Loading image")).toBeVisible();
+    await expect(wizard.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(registrationRequests).toBe(0);
+
+    await wizard.locator('input[type="file"]').setInputFiles({
+      name: "replacement.webp",
+      mimeType: "image/webp",
+      buffer: Buffer.concat([validWebp, replacementMarker]),
+    });
+    releaseHydration();
+    await expect(wizard.locator("form")).toHaveAttribute("aria-busy", "false");
+    await expect(wizard.getByRole("img", { name: "Preview" })).toBeVisible();
+    await wizard.getByRole("button", { name: "Next" }).click();
+
+    await expect.poll(() => registrationRequests).toBe(1);
+    expect(registrationBody).not.toBeNull();
+    expect(registrationBody!.includes(replacementMarker)).toBe(true);
+    expect(registrationBody!.includes(staleMarker)).toBe(false);
+  });
+
+  test("removal prevents registration and stale hydration cannot restore the crop", async ({
+    frigateApp,
+  }) => {
+    let releaseHydration!: () => void;
+    const hydrationGate = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    let registrationRequests = 0;
+
+    await installGroupedFaces(frigateApp);
+    await frigateApp.page.route("**/clips/faces/train/*", async (route) => {
+      if (route.request().resourceType() === "fetch") {
+        await hydrationGate;
+      }
+      await route
+        .fulfill({ status: 200, contentType: "image/webp", body: validWebp })
+        .catch(() => undefined);
+    });
+    await frigateApp.page.route("**/api/faces/*/register", (route) => {
+      registrationRequests += 1;
+      return route.fulfill({ json: { success: true } });
+    });
+
+    const { wizard } = await openIdentifiedWizard(
+      frigateApp,
+      0,
+      "removed_person",
+    );
+    await wizard.getByRole("button", { name: "Remove initial image" }).click();
+    releaseHydration();
+    await expect(wizard.getByRole("img", { name: "Preview" })).toHaveCount(0);
+    await expect(wizard.getByText("Drag and drop or paste")).toBeVisible();
+    await expect(wizard.getByRole("button", { name: "Next" })).toBeDisabled();
+    expect(registrationRequests).toBe(0);
+  });
+
+  test("closing before hydration prevents stale state in toolbar Add Face", async ({
+    frigateApp,
+  }) => {
+    let releaseHydration!: () => void;
+    const hydrationGate = new Promise<void>((resolve) => {
+      releaseHydration = resolve;
+    });
+    let registrationRequests = 0;
+
+    await installGroupedFaces(frigateApp);
+    await frigateApp.page.route("**/clips/faces/train/*", async (route) => {
+      if (route.request().resourceType() === "fetch") {
+        await hydrationGate;
+      }
+      await route
+        .fulfill({ status: 200, contentType: "image/webp", body: validWebp })
+        .catch(() => undefined);
+    });
+    await frigateApp.page.route("**/api/faces/*/register", (route) => {
+      registrationRequests += 1;
+      return route.fulfill({ json: { success: true } });
+    });
+
+    const { detail, wizard } = await openIdentifiedWizard(
+      frigateApp,
+      0,
+      "closed_person",
+    );
+    await expect(wizard.getByText("Loading image")).toBeVisible();
+    await closeOverlay(frigateApp, wizard);
+    releaseHydration();
+    if (!frigateApp.isMobile) {
+      await closeOverlay(frigateApp, detail);
+    }
+
+    await frigateApp.page.getByRole("button", { name: "Add Face" }).click();
+    const emptyWizard = await advanceAddFaceName(frigateApp, "fresh_person");
+    await expectWizardContained(frigateApp, emptyWizard);
+    await expect(emptyWizard.getByRole("img", { name: "Preview" })).toHaveCount(
+      0,
+    );
+    await expect(emptyWizard.getByText("Loading image")).toHaveCount(0);
+    await expect(
+      emptyWizard.getByText("The image could not be loaded"),
+    ).toHaveCount(0);
+    await expect(emptyWizard.getByText("Drag and drop or paste")).toBeVisible();
+    await expect(
+      emptyWizard.getByRole("button", { name: "Next" }),
+    ).toBeDisabled();
+    expect(registrationRequests).toBe(0);
+  });
+});
+
 test.describe("Face Library — local not-a-face rejection @high", () => {
   test.use({
     expectedErrors: [
